@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+required_tests_scope="src/domain"
 required_tests=(
   pow_picks_highest_cumulative_work
   pos_picks_highest_vote_weight
