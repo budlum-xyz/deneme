@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+required_tests_scope="wallet-core"
 required_tests=(
   entropy_size_preserves_mnemonic_word_count
   wallet_generate_rejects_placeholder_entropy_in_production
