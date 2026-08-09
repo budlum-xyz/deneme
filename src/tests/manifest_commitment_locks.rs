@@ -111,8 +111,20 @@ fn relabelling_a_shard_changes_the_manifest_id() {
     relabelled[0].kind = ShardKind::Parity;
 
     assert_ne!(
-        manifest_id_from_parts(&m.shards, &m.erasure, &m.encryption),
-        manifest_id_from_parts(&relabelled, &m.erasure, &m.encryption),
+        manifest_id_from_parts(
+            &m.shards,
+            &m.erasure,
+            &m.encryption,
+            m.content_size(),
+            m.total_size
+        ),
+        manifest_id_from_parts(
+            &relabelled,
+            &m.erasure,
+            &m.encryption,
+            m.content_size(),
+            m.total_size
+        ),
         "a shard's kind must be inside the commitment"
     );
 }
@@ -127,8 +139,20 @@ fn understating_k_changes_the_manifest_id() {
     let understated = ErasureScheme { k: 1, n: 6 };
 
     assert_ne!(
-        manifest_id_from_parts(&m.shards, &honest, &m.encryption),
-        manifest_id_from_parts(&m.shards, &understated, &m.encryption),
+        manifest_id_from_parts(
+            &m.shards,
+            &honest,
+            &m.encryption,
+            m.content_size(),
+            m.total_size
+        ),
+        manifest_id_from_parts(
+            &m.shards,
+            &understated,
+            &m.encryption,
+            m.content_size(),
+            m.total_size
+        ),
         "the erasure scheme must be inside the commitment"
     );
 
@@ -179,7 +203,13 @@ fn a_content_size_larger_than_the_stored_bytes_is_refused() {
 
     let mut lying = coded_manifest();
     lying.content_size = stored + 1;
-    lying.manifest_id = manifest_id_from_parts(&lying.shards, &lying.erasure, &lying.encryption);
+    lying.manifest_id = manifest_id_from_parts(
+        &lying.shards,
+        &lying.erasure,
+        &lying.encryption,
+        lying.content_size(),
+        lying.total_size,
+    );
     assert!(
         lying.validate_untrusted().is_err(),
         "the untrusted check must catch it even with a consistent id"
@@ -226,7 +256,13 @@ fn duplicate_shard_indices_are_refused() {
     let mut m = coded_manifest();
     m.shards[1].index = m.shards[0].index;
     m.total_size = m.shards.iter().map(|s| s.size as u64).sum();
-    m.manifest_id = manifest_id_from_parts(&m.shards, &m.erasure, &m.encryption);
+    m.manifest_id = manifest_id_from_parts(
+        &m.shards,
+        &m.erasure,
+        &m.encryption,
+        m.content_size(),
+        m.total_size,
+    );
     assert!(
         m.validate_untrusted().is_err(),
         "two shards at the same index would make lookup ambiguous"
@@ -243,7 +279,13 @@ fn the_v2_commitment_differs_from_v1() {
     let scheme = ErasureScheme::replication(2);
     assert_ne!(
         crate::storage::manifest::manifest_id_from_shards(&shards),
-        manifest_id_from_parts(&shards, &scheme, &ContentEncryption::Plaintext),
+        manifest_id_from_parts(
+            &shards,
+            &scheme,
+            &ContentEncryption::Plaintext,
+            shards.iter().map(|s| u64::from(s.size)).sum(),
+            shards.iter().map(|s| u64::from(s.size)).sum(),
+        ),
         "V2 must be domain-separated from V1"
     );
 }

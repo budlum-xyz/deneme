@@ -197,7 +197,7 @@ else:
             "is the same as not binding it, with the appearance of binding."
         )
     checked += 1
-    if "BDLM_MANIFEST_V3" not in commit:
+    if "BDLM_MANIFEST_V4" not in commit:
         problems.append(
             "the commitment is not domain-separated as V3. Adding a field "
             "without changing the domain tag lets a V2 id and a V3 id collide "
@@ -384,10 +384,10 @@ if commit_mode == "bound":
     encryption: &ContentEncryption,
 ) -> ContentId {
     let mut buf = Vec::new();
-    buf.extend_from_slice(b"BDLM_MANIFEST_V3");
+    buf.extend_from_slice(b"BDLM_MANIFEST_V4");
     buf.extend_from_slice(&erasure.k.to_le_bytes());
     buf.push(encryption.commitment_tag());
-    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V3", &buf]))
+    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V4", &buf]))
 }
 """
     site = "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);\n"
@@ -399,9 +399,9 @@ elif commit_mode == "ignored":
     encryption: &ContentEncryption,
 ) -> ContentId {
     let mut buf = Vec::new();
-    buf.extend_from_slice(b"BDLM_MANIFEST_V3");
+    buf.extend_from_slice(b"BDLM_MANIFEST_V4");
     buf.extend_from_slice(&erasure.k.to_le_bytes());
-    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V3", &buf]))
+    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V4", &buf]))
 }
 """
     site = "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);\n"
@@ -411,9 +411,9 @@ elif commit_mode == "unbound":
     erasure: &ErasureScheme,
 ) -> ContentId {
     let mut buf = Vec::new();
-    buf.extend_from_slice(b"BDLM_MANIFEST_V3");
+    buf.extend_from_slice(b"BDLM_MANIFEST_V4");
     buf.extend_from_slice(&erasure.k.to_le_bytes());
-    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V3", &buf]))
+    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V4", &buf]))
 }
 """
     site = "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure);\n"
@@ -437,9 +437,9 @@ else:  # literal: binds a hardcoded claim instead of the manifest's own
     encryption: &ContentEncryption,
 ) -> ContentId {
     let mut buf = Vec::new();
-    buf.extend_from_slice(b"BDLM_MANIFEST_V3");
+    buf.extend_from_slice(b"BDLM_MANIFEST_V4");
     buf.push(encryption.commitment_tag());
-    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V3", &buf]))
+    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V4", &buf]))
 }
 """
     site = "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &ContentEncryption::Plaintext);\n"

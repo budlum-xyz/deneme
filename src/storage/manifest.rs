@@ -337,12 +337,10 @@ pub struct ContentManifest {
     pub owner: crate::core::address::Address,
     /// Sum of the stored shard sizes.
     ///
-    /// IDENTITY: excluded - derived from `shards`, which the id does cover.
-    /// `validate_untrusted` recomputes it from the shard list and refuses a
-    /// mismatch, so a manifest carrying a false total cannot be stored.
-    /// Hashing it as well would bind the same information twice and let a
-    /// consistent manifest fail the id check for an arithmetic reason the
-    /// error message would not explain.
+    /// Hashed into the id alongside `content_size`: the object length and
+    /// the stored-byte total are distinct commitments (the last data stripe
+    /// can be zero-padded), and a manifest id that covered only one of them
+    /// would leave the other free to be relabelled.
     pub total_size: u64,
     /// Number of shards.
     ///
@@ -434,7 +432,7 @@ impl ContentManifest {
         // commitment that no one made. Callers that did encrypt say so with
         // `with_encryption`.
         let encryption = ContentEncryption::Plaintext;
-        let manifest_id = manifest_id_from_parts(&shards, &erasure, &encryption);
+        let manifest_id = manifest_id_from_parts(&shards, &erasure, &encryption, total, total);
         Ok(ContentManifest {
             manifest_id,
             owner,
@@ -478,7 +476,13 @@ impl ContentManifest {
             ));
         }
         self.content_size = content_size;
-        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);
+        self.manifest_id = manifest_id_from_parts(
+            &self.shards,
+            &self.erasure,
+            &self.encryption,
+            self.content_size(),
+            self.total_size,
+        );
         Ok(self)
     }
 
@@ -492,7 +496,13 @@ impl ContentManifest {
     /// with a squatted entry that `register_manifest` would then keep,
     /// because registration is idempotent and first-writer-wins.
     pub fn verify_id(&self) -> Result<(), String> {
-        let expected = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);
+        let expected = manifest_id_from_parts(
+            &self.shards,
+            &self.erasure,
+            &self.encryption,
+            self.content_size(),
+            self.total_size,
+        );
         if expected != self.manifest_id {
             return Err(format!(
                 "manifest_id {} does not match the {} its contents derive",
@@ -626,7 +636,13 @@ impl ContentManifest {
             ));
         }
         self.erasure = erasure;
-        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);
+        self.manifest_id = manifest_id_from_parts(
+            &self.shards,
+            &self.erasure,
+            &self.encryption,
+            self.content_size(),
+            self.total_size,
+        );
         Ok(self)
     }
 
@@ -675,7 +691,13 @@ impl ContentManifest {
     #[must_use]
     pub fn with_encryption(mut self, encryption: ContentEncryption) -> Self {
         self.encryption = encryption;
-        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);
+        self.manifest_id = manifest_id_from_parts(
+            &self.shards,
+            &self.erasure,
+            &self.encryption,
+            self.content_size(),
+            self.total_size,
+        );
         self
     }
 
@@ -774,9 +796,11 @@ pub fn manifest_id_from_parts(
     shards: &[ShardRef],
     erasure: &ErasureScheme,
     encryption: &ContentEncryption,
+    content_size: u64,
+    total_size: u64,
 ) -> ContentId {
     let mut buf = Vec::with_capacity(32 + shards.len() * (4 + 32 + 4 + 1));
-    buf.extend_from_slice(b"BDLM_MANIFEST_V3");
+    buf.extend_from_slice(b"BDLM_MANIFEST_V4");
     buf.extend_from_slice(&(shards.len() as u32).to_le_bytes());
     for s in shards {
         buf.extend_from_slice(&s.index.to_le_bytes());
@@ -790,7 +814,14 @@ pub fn manifest_id_from_parts(
     buf.extend_from_slice(&erasure.k.to_le_bytes());
     buf.extend_from_slice(&erasure.n.to_le_bytes());
     buf.push(encryption.commitment_tag());
-    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V3", &buf]))
+    // The object length is part of the identity: two manifests with the same
+    // shard set but different content lengths (e.g. different padding in the
+    // final stripe) must not share an id (Strix MEDIUM, CWE-345; BUDLUM
+    // bulgu #107). `ContentManifest::content_size()` returns the committed
+    // length, falling back to the shard total for pre-V4 manifests.
+    buf.extend_from_slice(&content_size.to_le_bytes());
+    buf.extend_from_slice(&total_size.to_le_bytes());
+    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V4", &buf]))
 }
 
 #[cfg(test)]

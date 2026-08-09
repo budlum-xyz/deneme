@@ -154,8 +154,28 @@ impl BudlumxyzRegistry {
     /// [`BudlumxyzError::NotFound`] if the proposal names an app that does
     /// not exist. Checked at execution rather than at submission, because an
     /// app can be registered while the vote is open.
-    pub fn mark_verified_by_proposal(&mut self, id: u64) -> Result<(), BudlumxyzError> {
+    pub fn mark_verified_by_proposal(
+        &mut self,
+        id: u64,
+        expected_developer: &crate::core::address::Address,
+        expected_manifest_id: Option<crate::storage::content_id::ContentId>,
+        expected_website_url_hash: &[u8; 32],
+    ) -> Result<(), BudlumxyzError> {
+        use sha2::{Digest, Sha256};
         let app = self.apps.get_mut(&id).ok_or(BudlumxyzError::NotFound)?;
+        // Refuse to award `verified` unless the current record still matches
+        // the app snapshot the vote reviewed. The developer could have
+        // changed `website_url` or `manifest_id` after the proposal passed;
+        // awarding the badge to different content would make the governance
+        // approval attach to something the voters never evaluated (Strix
+        // HIGH, CWE-345).
+        let current_url_hash: [u8; 32] = Sha256::digest(app.website_url.as_bytes()).into();
+        if &app.developer != expected_developer
+            || app.manifest_id != expected_manifest_id
+            || current_url_hash != *expected_website_url_hash
+        {
+            return Err(BudlumxyzError::InvalidData);
+        }
         app.verified = true;
         Ok(())
     }
@@ -289,8 +309,14 @@ mod tests {
         );
 
         // The proposal path is the only writer of `verified`, and it takes
-        // no caller: the authority is the counted vote, not an address.
-        reg.mark_verified_by_proposal(id)
+        // no caller: the authority is the counted vote, not an address. It
+        // still checks the reviewed snapshot, so the badge cannot be
+        // retargeted to content the vote never evaluated.
+        let url_hash: [u8; 32] = {
+            use sha2::{Digest, Sha256};
+            Sha256::digest(b"https://example.bud").into()
+        };
+        reg.mark_verified_by_proposal(id, &dev, None, &url_hash)
             .expect("the app exists, so the proposal names something real");
         assert!(reg.apps[&id].verified);
         assert!(
@@ -309,7 +335,7 @@ mod tests {
     fn a_proposal_for_a_missing_app_is_refused() {
         let mut reg = BudlumxyzRegistry::new();
         assert!(matches!(
-            reg.mark_verified_by_proposal(404),
+            reg.mark_verified_by_proposal(404, &Address::from([1u8; 32]), None, &[0u8; 32]),
             Err(BudlumxyzError::NotFound)
         ));
         assert!(

@@ -196,8 +196,15 @@ pub enum ProposalType {
     ///
     /// `AppRecord.verified` was hashed into the state root from the start and
     /// no path could set it, so it was permanently false. This is the path.
+    /// The proposal binds the reviewed snapshot: the developer address, the
+    /// manifest id and the website-url hash that voters evaluated. A passed
+    /// vote may not be retargeted to different content (Strix HIGH, CWE-345;
+    /// BUDLUM bulgu #173).
     VerifyHubApp {
         app_id: u64,
+        developer: crate::core::address::Address,
+        manifest_id: Option<crate::storage::content_id::ContentId>,
+        website_url_hash: [u8; 32],
     },
     UnfreezeConsensusDomain {
         domain_id: u32,
@@ -431,11 +438,18 @@ impl GovernanceState {
             ProposalType::ParameterUpdate(key, value) => {
                 validate_governance_parameter_update(key, value)?;
             }
-            ProposalType::VerifyHubApp { app_id } => {
+            ProposalType::VerifyHubApp {
+                app_id,
+                developer,
+                manifest_id,
+                website_url_hash,
+            } => {
                 // Existence is checked at execution, not here: an app can be
                 // registered while the vote is open, and refusing at proposal
                 // time would make the outcome depend on submission order.
-                let _ = app_id;
+                // The reviewed snapshot is bound here so the badge cannot be
+                // retargeted later (Strix HIGH, CWE-345).
+                let _ = (app_id, developer, manifest_id, website_url_hash);
             }
             ProposalType::SetEncryptionPolicy(policy) => policy.validate()?,
             ProposalType::SetConstitutionParameter(parameter) => parameter.validate_update()?,

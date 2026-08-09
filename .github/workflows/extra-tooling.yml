@@ -426,7 +426,6 @@ jobs:
   # ama sessizce de kaybolmaz.
   kani-slow-proofs:
     name: Kani Proofs (yavas set, programli)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:

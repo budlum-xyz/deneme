@@ -1545,20 +1545,34 @@ impl AccountState {
                 self.ai_registry.dewhitelist_verifier(address);
                 tracing::info!("Executing Governance: Dewhitelisted verifier {address}");
             }
-            ProposalType::VerifyHubApp { app_id } => {
+            ProposalType::VerifyHubApp {
+                app_id,
+                developer,
+                manifest_id,
+                website_url_hash,
+            } => {
                 // The badge `AppRecord.verified` was hashed into the state
                 // root from the start and no path could set it, so it was
                 // permanently false. This is that path, and it is a vote
                 // rather than a transaction because the point of `verified`
                 // is that somebody other than the developer stood behind it.
-                match self.budlumxyz.mark_verified_by_proposal(*app_id) {
+                // The proposal binds the reviewed snapshot (developer,
+                // manifest id, website-url hash), so the badge cannot be
+                // retargeted to content the voters never evaluated (Strix
+                // HIGH, CWE-345).
+                match self.budlumxyz.mark_verified_by_proposal(
+                    *app_id,
+                    developer,
+                    *manifest_id,
+                    website_url_hash,
+                ) {
                     Ok(()) => {
                         tracing::info!("Executing Governance: hub app {app_id} verified");
                     }
                     Err(e) => tracing::warn!(
                         "Rejecting VerifyHubApp for app {app_id}: {e}. A proposal may \
-                         pass for an app that is later removed; the vote does not \
-                         create the record"
+                         pass for an app that is later removed or changed; the vote does \
+                         not create the record"
                     ),
                 }
             }
@@ -2612,7 +2626,22 @@ mod tests {
             )
             .expect("a fresh registry has no id to collide with");
 
-        let mut proposal = Proposal::new(1, dev, ProposalType::VerifyHubApp { app_id }, 0, 10);
+        let website_url_hash: [u8; 32] = {
+            use sha2::{Digest, Sha256};
+            Sha256::digest(b"https://example.bud").into()
+        };
+        let mut proposal = Proposal::new(
+            1,
+            dev,
+            ProposalType::VerifyHubApp {
+                app_id,
+                developer: dev,
+                manifest_id: None,
+                website_url_hash,
+            },
+            0,
+            10,
+        );
         state.execute_proposal(&proposal);
         assert!(
             state.budlumxyz.apps[&app_id].verified,

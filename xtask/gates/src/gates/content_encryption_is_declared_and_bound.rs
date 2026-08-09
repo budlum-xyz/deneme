@@ -322,7 +322,7 @@ fn check_field(code: &str) -> Checks {
 }
 
 /// The binding: the commitment must take the declaration, read its tag and
-/// stay domain-separated as V3.
+/// stay domain-separated as V4.
 fn check_binding(code: &str) -> Checks {
     let mut checked = 1;
     let mut problems = Vec::new();
@@ -354,10 +354,10 @@ fn check_binding(code: &str) -> Checks {
         ));
     }
     checked += 1;
-    if !commit.contains("BDLM_MANIFEST_V3") {
+    if !commit.contains("BDLM_MANIFEST_V4") {
         problems.push(String::from(
-            "the commitment is not domain-separated as V3. Adding a field \
-             without changing the domain tag lets a V2 id and a V3 id \
+            "the commitment is not domain-separated as V4. Adding a field \
+             without changing the domain tag lets a V3 id and a V4 id \
              collide across different meanings.",
         ));
     }
@@ -557,9 +557,9 @@ fn fixture_commit(mode: &str) -> (String, String) {
             String::from(
                 "pub fn manifest_id_from_parts(\n    shards: &[ShardRef],\n    \
                  erasure: &ErasureScheme,\n) -> ContentId {\n    let mut buf = Vec::new();\n    \
-                 buf.extend_from_slice(b\"BDLM_MANIFEST_V3\");\n    \
+                 buf.extend_from_slice(b\"BDLM_MANIFEST_V4\");\n    \
                  buf.extend_from_slice(&erasure.k.to_le_bytes());\n    \
-                 ContentId(hash_fields_bytes(&[b\"BDLM_MANIFEST_V3\", &buf]))\n}\n",
+                 ContentId(hash_fields_bytes(&[b\"BDLM_MANIFEST_V4\", &buf]))\n}\n",
             ),
             String::from(
                 "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure);\n",
@@ -569,9 +569,9 @@ fn fixture_commit(mode: &str) -> (String, String) {
             String::from(
                 "pub fn manifest_id_from_parts(\n    shards: &[ShardRef],\n    \
                  erasure: &ErasureScheme,\n    encryption: &ContentEncryption,\n) -> ContentId {\n    \
-                 let mut buf = Vec::new();\n    buf.extend_from_slice(b\"BDLM_MANIFEST_V3\");\n    \
+                 let mut buf = Vec::new();\n    buf.extend_from_slice(b\"BDLM_MANIFEST_V4\");\n    \
                  buf.extend_from_slice(&erasure.k.to_le_bytes());\n    \
-                 ContentId(hash_fields_bytes(&[b\"BDLM_MANIFEST_V3\", &buf]))\n}\n",
+                 ContentId(hash_fields_bytes(&[b\"BDLM_MANIFEST_V4\", &buf]))\n}\n",
             ),
             String::from(
                 "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);\n",
@@ -593,9 +593,9 @@ fn fixture_commit(mode: &str) -> (String, String) {
             String::from(
                 "pub fn manifest_id_from_parts(\n    shards: &[ShardRef],\n    \
                  erasure: &ErasureScheme,\n    encryption: &ContentEncryption,\n) -> ContentId {\n    \
-                 let mut buf = Vec::new();\n    buf.extend_from_slice(b\"BDLM_MANIFEST_V3\");\n    \
+                 let mut buf = Vec::new();\n    buf.extend_from_slice(b\"BDLM_MANIFEST_V4\");\n    \
                  buf.push(encryption.commitment_tag());\n    \
-                 ContentId(hash_fields_bytes(&[b\"BDLM_MANIFEST_V3\", &buf]))\n}\n",
+                 ContentId(hash_fields_bytes(&[b\"BDLM_MANIFEST_V4\", &buf]))\n}\n",
             ),
             String::from(
                 "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &ContentEncryption::Plaintext);\n",
@@ -605,10 +605,10 @@ fn fixture_commit(mode: &str) -> (String, String) {
             String::from(
                 "pub fn manifest_id_from_parts(\n    shards: &[ShardRef],\n    \
                  erasure: &ErasureScheme,\n    encryption: &ContentEncryption,\n) -> ContentId {\n    \
-                 let mut buf = Vec::new();\n    buf.extend_from_slice(b\"BDLM_MANIFEST_V3\");\n    \
+                 let mut buf = Vec::new();\n    buf.extend_from_slice(b\"BDLM_MANIFEST_V4\");\n    \
                  buf.extend_from_slice(&erasure.k.to_le_bytes());\n    \
                  buf.push(encryption.commitment_tag());\n    \
-                 ContentId(hash_fields_bytes(&[b\"BDLM_MANIFEST_V3\", &buf]))\n}\n",
+                 ContentId(hash_fields_bytes(&[b\"BDLM_MANIFEST_V4\", &buf]))\n}\n",
             ),
             String::from(
                 "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);\n",
