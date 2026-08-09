@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+required_tests_scope="src/(chain/fee_market|tokenomics|core|tests/block_reward)"
 required_tests=(
   base_fee_increase_is_bounded
   base_fee_decrease_is_bounded
