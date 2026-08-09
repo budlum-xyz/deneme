@@ -70,6 +70,20 @@ def strip_comments(src):
     return re.sub(r"//[^\n]*", "", src)
 
 
+def strip_comments_and_literals(src):
+    # String/char literals are removed too: a penalty-control substring
+    # written as `"operator_cooldown_until(&operator, now_unix)"` must not
+    # count as enforcement while the executable logic is absent (Strix
+    # MEDIUM, deneme round 2 PR #228). A Rust string continued with a
+    # trailing backslash spans lines; `\\\n` covers that case without a
+    # DOTALL flag, which would let an unterminated literal swallow the rest
+    # of the file.
+    src = re.sub(r"//[^\n]*", "", src)
+    src = re.sub(r'"(?:\\.|[^"\\\n]|\\\n)*"', '""', src)
+    src = re.sub(r"'(?:\\.|[^'\\\n]|\\\n)*'", "''", src)
+    return src
+
+
 def body_of(src, header_re):
     m = re.search(header_re, src)
     if not m:
@@ -88,8 +102,8 @@ def body_of(src, header_re):
 
 
 deal_src = open(deal, encoding="utf-8").read()
-deal_code = strip_comments(deal_src)
-chain_code = strip_comments(open(chain, encoding="utf-8").read())
+deal_code = strip_comments_and_literals(deal_src)
+chain_code = strip_comments_and_literals(open(chain, encoding="utf-8").read())
 
 problems = []
 checked = 0
