@@ -130,11 +130,39 @@ GUARD = re.compile(
     r"|reject|refuse|deny|guard)_[a-z0-9_]+)"
 )
 
+def has_file_level_unwired_marker(text):
+    """Accept only a leading module-doc marker for the file itself.
+
+    A nested `mod x { //! WIRING: unwired - ... }` documents only that
+    nested module. Treating any `//!` line anywhere in the file as a
+    file-wide waiver lets an unrelated live top-level guard disappear from
+    the count (Strix MEDIUM, CWE-706, PR #145 follow-up).
+    """
+    saw_doc = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if saw_doc:
+                continue
+            continue
+        if stripped.startswith("//!"):
+            saw_doc = True
+            if re.search(r"^//![ \t]*WIRING: unwired[ \t]*-[ \t]*\S.*$", stripped):
+                return True
+            continue
+        break
+    return False
+
+
 unreached = []
 for path, text in prod.items():
     body = strip_test_mod(text)
     # A module that declares itself unwired is already honest about this.
-    if "WIRING: unwired" in text:
+    # Only the file's own leading module-doc line `//! WIRING: unwired -
+    # <reason>` counts: a raw substring anywhere, or a nested module's doc,
+    # would let an unrelated comment exempt the whole file (Strix MEDIUM,
+    # deneme round 2 PR #231; nested-module case PR #145 follow-up).
+    if has_file_level_unwired_marker(text):
         continue
     for m in GUARD.finditer(body):
         name = m.group(1)
@@ -309,6 +337,22 @@ mod tests {
 
   # 10. The tree as committed must pass.
   gate >/dev/null || fail "the committed tree does not match its own baseline"
+  canaries=$((canaries + 1))
+
+  # 11. A `//! WIRING: unwired` marker inside a nested module documents only
+  #     that module: an unrelated live top-level guard must still be counted
+  #     (Strix MEDIUM, CWE-706, PR #145 follow-up).
+  mk "$tmp/nestedmark" \
+    'pub mod nested {
+        //! WIRING: unwired - nested helper, no caller yet.
+    }
+pub fn check_thing_is_allowed(x: u8) -> Result<(), String> {
+    if x == 0 { return Err("no".into()); }
+    Ok(())
+}' \
+    "$SILENT"
+  [ "$(count_of "$tmp/nestedmark")" = "1" ] \
+    || fail "canary 11: a nested module-doc marker exempted the whole file"
   canaries=$((canaries + 1))
 
   echo "guard reachability gate self-test OK: $canaries canaries."

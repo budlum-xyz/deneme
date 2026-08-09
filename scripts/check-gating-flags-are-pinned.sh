@@ -79,6 +79,41 @@ if not os.path.isfile(air):
 
 src = open(air, encoding="utf-8").read()
 
+def strip_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`); a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail looking
+    # like executable code (Strix MEDIUM, CWE-180, PR #145 follow-up).
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            i += 2
+            continue
+        if depth:
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+# Scan only executable Rust: line comments, block comments and string
+# literals are stripped before any evidence regex runs, otherwise a
+# contributor could satisfy the gate by writing `assert_bool(r_same)` inside
+# a comment while the live flag stays unconstrained (Strix HIGH, CWE-180,
+# deneme round 2 PR #218).
+src = re.sub(r"//[^\n]*", "", src)
+src = strip_block_comments(src)
+src = re.sub(r'"(?:\\.|[^"\\])*"', '""', src)
+src = re.sub(r"'(?:\\.|[^'\\])*'", "''", src)
+
 # The flags this gate is responsible for, and the local binding each one is
 # read into. Both spellings matter: the column name proves the flag still
 # exists, the local name is what the constraints are written in terms of.
@@ -291,7 +326,17 @@ pub const COL_MEM_SAME: usize = 54;
     exit 1
   fi
 
-  echo "gating-flag gate self-test OK: an unconstrained flag, a boolean-but-free flag, a flag with no booleanity, a deleted column, a renamed local and a missing AIR are all rejected; a properly pinned tree passes."
+  # 8. A flag pinned only inside a nested block comment is not pinned
+  #     (Strix MEDIUM, CWE-180, PR #145 follow-up).
+  mk "$tmp/nestedc" 'pub const COL_REG_SAME: usize = 28;
+pub const COL_MEM_SAME: usize = 54;
+        /* outer /* inner */ builder.assert_bool(r_same.clone()); */'
+  if ( scan "$tmp/nestedc" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a flag pinned only inside a nested comment was accepted!" >&2
+    exit 1
+  fi
+
+  echo "gating-flag gate self-test OK: an unconstrained flag, a boolean-but-free flag, a flag with no booleanity, a deleted column, a renamed local, a missing AIR and a pin hidden in a nested comment are all rejected; a properly pinned tree passes."
 }
 
 if [ "${1:-}" = "--self-test" ]; then
