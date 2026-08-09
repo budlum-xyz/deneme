@@ -62,8 +62,44 @@ if not os.path.isfile(wallet):
     print(f"FAIL: no wallet core at {wallet}", file=sys.stderr)
     sys.exit(2)
 
+def strip_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`); a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail looking
+    # like executable code (Strix MEDIUM, CWE-180, PR #145 follow-up).
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            i += 2
+            continue
+        if depth:
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def strip_rust_non_code(text):
+    # Strip line comments, block comments and string/char literals so marker
+    # strings inside /* ... */ or string constants cannot satisfy the gate
+    # (Strix LOW, deneme round 2 PR #226).
+    text = re.sub(r"//[^\n]*", "", text)
+    text = strip_block_comments(text)
+    text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+    text = re.sub(r"'(?:\\.|[^'\\])*'", "''", text)
+    return text
+
+
 src = open(wallet, encoding="utf-8").read()
-code = re.sub(r"//[^\n]*", "", src)
+code = strip_rust_non_code(src)
 
 problems = []
 checked = 0
@@ -118,7 +154,7 @@ else:
                     body = open(path, encoding="utf-8", errors="ignore").read()
                 except OSError:
                     continue
-                body = re.sub(r"//[^\n]*", "", body)
+                body = strip_rust_non_code(body)
                 if re.search(r"#\[\s*wasm_bindgen", body):
                     wasm_exports.append(path)
                 if re.search(r"uniffi::(export|setup_scaffolding)", body):

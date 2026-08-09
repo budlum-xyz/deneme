@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+required_tests_scope="src/storage"
 required_tests=(
   node_mode_maps_roles
   node_archive_rejects_pruning
