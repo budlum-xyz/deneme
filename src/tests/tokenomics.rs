@@ -271,13 +271,13 @@ fn timed_burn_fires_via_real_epoch_advance() {
 
     // Advance epochs one-by-one via the canonical transition until just before a year.
     for _ in 0..(epochs_per_year - 1) {
-        state.advance_epoch(0);
+        state.advance_epoch(0, crate::core::transaction::DEFAULT_CHAIN_ID);
     }
     assert_eq!(state.get_balance(&addrs.burn_reserve), bud(40_000_000));
     assert_eq!(state.timed_burn.years_burned, 0);
 
     // One more advance crosses the year boundary → timed burn auto-fires.
-    state.advance_epoch(0);
+    state.advance_epoch(0, crate::core::transaction::DEFAULT_CHAIN_ID);
     assert_eq!(state.timed_burn.years_burned, 1);
     assert_eq!(
         state.get_balance(&addrs.burn_reserve),
@@ -299,7 +299,7 @@ fn fixed_supply_tokenomics_disables_epoch_yield_minting() {
         .build_state();
     state.add_validator(addrs.community, 1_000);
     let before = state.get_balance(&addrs.community);
-    state.advance_epoch(0);
+    state.advance_epoch(0, crate::core::transaction::DEFAULT_CHAIN_ID);
     let after = state.get_balance(&addrs.community);
     assert_eq!(before, after, "fixed-supply tokenomics chain must not mint epoch yield without explicit reward-pool wiring");
 }
@@ -371,7 +371,7 @@ fn team_vesting_enforced_on_transfer() {
 
     // Advance to the cliff (25% unlocked = 5M spendable), then a 5M transfer works.
     for _ in 0..state.tokenomics.team_cliff_epochs {
-        state.advance_epoch(0);
+        state.advance_epoch(0, crate::core::transaction::DEFAULT_CHAIN_ID);
     }
     assert_eq!(state.spendable_balance(&addrs.team), bud(5_000_000));
 
@@ -486,7 +486,10 @@ fn one_epoch_close_does_not_expire_the_team_cliff() {
 
     // A real block timestamp, in milliseconds, exactly as
     // `apply_system_effects` passes it.
-    state.advance_epoch(1_785_450_000_000);
+    state.advance_epoch(
+        1_785_450_000_000,
+        crate::core::transaction::DEFAULT_CHAIN_ID,
+    );
 
     assert_eq!(
         state.spendable_balance(&team),
@@ -539,7 +542,10 @@ fn one_epoch_close_does_not_drain_the_burn_reserve() {
     let before = state.get_balance(&reserve);
     assert!(before > 0, "reserve is funded at genesis");
 
-    state.advance_epoch(1_785_450_000_000);
+    state.advance_epoch(
+        1_785_450_000_000,
+        crate::core::transaction::DEFAULT_CHAIN_ID,
+    );
 
     assert_eq!(
         state.timed_burn.years_burned, 0,
@@ -564,7 +570,10 @@ fn the_annual_burn_still_fires_after_a_year_of_epochs() {
 
     // Step to one epoch short of a year, then across it.
     state.epoch_index = state.tokenomics.epochs_per_year - 1;
-    state.advance_epoch(1_785_450_000_000);
+    state.advance_epoch(
+        1_785_450_000_000,
+        crate::core::transaction::DEFAULT_CHAIN_ID,
+    );
 
     assert_eq!(
         state.timed_burn.years_burned, 1,

@@ -193,7 +193,7 @@ impl Executor {
                 validator.pq_public_key = registration.pq_public_key.clone();
                 validator.active = validator.stake >= min_stake
                     && validator.is_consensus_ready()
-                    && validator.verify_pop_is_valid();
+                    && validator.verify_pop_is_valid(tx.chain_id);
 
                 let sender = state.get_or_create(&tx.from);
                 sender.balance = sender.balance.checked_sub(tx.fee).ok_or_else(|| {

@@ -100,7 +100,7 @@ mod integration_tests {
         // check before incrementing, so 11 calls reach the close of voting
         // (epoch 0→10, the 11th sees 10>=10 and finalises the tally).
         for _ in 0..11 {
-            state.advance_epoch(1000);
+            state.advance_epoch(1000, crate::core::transaction::DEFAULT_CHAIN_ID);
         }
 
         // Voting is over and the proposal carried, but it is not applied yet.
@@ -117,7 +117,7 @@ mod integration_tests {
         let delay =
             crate::core::governance::activation_delay_epochs(&state.governance.proposals[0].p_type);
         for _ in 0..delay {
-            state.advance_epoch(1000);
+            state.advance_epoch(1000, crate::core::transaction::DEFAULT_CHAIN_ID);
         }
 
         assert_eq!(

@@ -51,7 +51,8 @@ fn epoch_transition_does_not_mint_validator_yield() {
 
     let balance_before = bc.state.get_balance(&validator);
     let supply_before = bc.state.total_bud_committed();
-    bc.state.advance_epoch(1_000);
+    bc.state
+        .advance_epoch(1_000, crate::core::transaction::DEFAULT_CHAIN_ID);
 
     assert_eq!(bc.state.get_balance(&validator), balance_before);
     assert_eq!(bc.state.total_bud_committed(), supply_before);

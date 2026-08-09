@@ -499,7 +499,7 @@ impl GenesisConfig {
                         entry.pq_public_key = keys.registration.pq_public_key.clone();
                         entry.active = entry.stake >= validator_stake
                             && entry.is_consensus_ready()
-                            && entry.verify_pop_is_valid();
+                            && entry.verify_pop_is_valid(self.chain_id);
                     }
                 }
             }

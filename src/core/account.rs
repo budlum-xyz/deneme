@@ -181,16 +181,20 @@ impl Validator {
     /// Verify this validator's canonical IETF BLS proof of possession.
     /// Registration transaction verification calls the same implementation;
     /// Keeping it here provides one readiness/introspection API.
-    pub fn verify_pop_is_valid(&self) -> bool {
+    /// The PoP must be bound to this chain id (R11: a PoP over only the key
+    /// replays across chains, so an operator slashed on one chain could
+    /// re-register the same key elsewhere without a fresh possession proof).
+    pub fn verify_pop_is_valid(&self, chain_id: u64) -> bool {
         if self.pop_signature.is_empty() || self.bls_public_key.is_empty() {
             return false;
         }
-        // RFC 9380's IETF PoP ciphersuite signs the canonical BLS public key.
-        // Address and chain binding comes from the outer signed
-        // RegisterConsensusKeys transaction, not from a non-standard PoP
-        // Message that would be incompatible with the ciphersuite.
-        crate::crypto::primitives::BlsKeypair::verify_pop(&self.bls_public_key, &self.pop_signature)
-            .is_ok()
+        crate::crypto::primitives::BlsKeypair::verify_pop(
+            &self.bls_public_key,
+            &self.pop_signature,
+            chain_id,
+            &self.address,
+        )
+        .is_ok()
     }
 
     /// Full readiness check - VRF + BLS + PoP signature.
@@ -906,7 +910,7 @@ impl AccountState {
         hasher.update((validators.len() as u64).to_le_bytes());
         for validator in validators {
             if !validator.is_consensus_ready()
-                || !validator.verify_pop_is_valid()
+                || !validator.verify_pop_is_valid(chain_id)
                 || schnorrkel::PublicKey::from_bytes(&validator.vrf_public_key).is_err()
                 || crate::crypto::primitives::PqKeyPair::validate_public_key(
                     &validator.pq_public_key,
@@ -1368,7 +1372,7 @@ impl AccountState {
 
     /// Record consensus participation for the epoch that just completed and
     /// ... [doc continues]
-    pub fn advance_epoch(&mut self, current_timestamp: u128) {
+    pub fn advance_epoch(&mut self, current_timestamp: u128, chain_id: u64) {
         let total_stake = self.get_total_stake();
         let quorum_pct = 33; // 33% stake required for quorum
 
@@ -1438,7 +1442,7 @@ impl AccountState {
                 validator.active = validator.stake > 0
                     && !validator.slashed
                     && validator.is_consensus_ready()
-                    && validator.verify_pop_is_valid();
+                    && validator.verify_pop_is_valid(chain_id);
             }
         }
 
@@ -2421,11 +2425,11 @@ mod tests {
         assert_eq!(jailed.jail_until, 7);
 
         for epoch in 1..=6 {
-            state.advance_epoch(epoch * 1_000);
+            state.advance_epoch(epoch * 1_000, crate::core::transaction::DEFAULT_CHAIN_ID);
         }
         assert!(state.get_validator(&validator).unwrap().jailed);
 
-        state.advance_epoch(7_000);
+        state.advance_epoch(7_000, crate::core::transaction::DEFAULT_CHAIN_ID);
         let released = state.get_validator(&validator).unwrap();
         assert!(!released.jailed);
         assert!(released.slashed);
@@ -2554,7 +2558,7 @@ mod tests {
         let before_supply = state.circulating_supply();
 
         // Epoch advance → yield dağıtımı tetiklenir
-        state.advance_epoch(1_000);
+        state.advance_epoch(1_000, crate::core::transaction::DEFAULT_CHAIN_ID);
 
         let after_supply = state.circulating_supply();
 
@@ -2791,11 +2795,11 @@ mod tests {
         proposal.activation_epoch = Some(11);
         state.governance.proposals.push(proposal);
 
-        state.advance_epoch(0);
+        state.advance_epoch(0, crate::core::transaction::DEFAULT_CHAIN_ID);
         assert_eq!(state.registry.params().min_stake, old);
         assert_eq!(state.governance.proposals[0].status, ProposalStatus::Passed);
 
-        state.advance_epoch(0);
+        state.advance_epoch(0, crate::core::transaction::DEFAULT_CHAIN_ID);
         assert_eq!(state.registry.params().min_stake, 5000);
         assert_eq!(
             state.governance.proposals[0].status,
@@ -3032,22 +3036,25 @@ mod c3_validator_readiness_tests {
 
     #[test]
     fn c3_pop_verification_uses_canonical_rfc9380_key_pop() {
+        use crate::core::transaction::DEFAULT_CHAIN_ID;
         let bls = crate::crypto::primitives::BlsKeypair::generate().unwrap();
         let addr = test_addr(5);
         let mut v = Validator::new(addr, 5000);
         v.vrf_public_key = vec![1; 32];
         v.bls_public_key = bls.public_key.clone();
-        v.pop_signature = bls.generate_pop();
+        v.pop_signature = bls.generate_pop(DEFAULT_CHAIN_ID, &addr);
         // Has_consensus_keys also requires the PQ key (see c3_fully_ready_validator);
         // Without it the readiness assertion below fails for an unrelated reason and
         // Stops this test from actually exercising PoP verification.
         v.pq_public_key = vec![4; 32];
 
-        assert!(v.verify_pop_is_valid());
-        assert_eq!(v.pop_signature, bls.generate_pop());
+        assert!(v.verify_pop_is_valid(DEFAULT_CHAIN_ID));
+        assert_eq!(v.pop_signature, bls.generate_pop(DEFAULT_CHAIN_ID, &addr));
+        // R11: a PoP produced for another chain must not satisfy this validator.
+        assert!(!v.verify_pop_is_valid(DEFAULT_CHAIN_ID + 1));
 
         v.pop_signature[0] ^= 1;
         assert!(v.has_consensus_keys());
-        assert!(!v.verify_pop_is_valid());
+        assert!(!v.verify_pop_is_valid(DEFAULT_CHAIN_ID));
     }
 }

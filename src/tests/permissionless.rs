@@ -809,13 +809,15 @@ fn signed_stake_tx(
 
 fn consensus_key_registration(
     keys: &ValidatorKeys,
+    chain_id: u64,
+    address: &Address,
 ) -> crate::core::transaction::ConsensusKeyRegistration {
     let bls = keys.bls_key.as_ref().expect("BLS key");
     crate::core::transaction::ConsensusKeyRegistration {
         scheme_id: crate::chain::finality::BLS_SCHEME_RFC9380_V1.to_string(),
         vrf_public_key: keys.vrf_key.public.to_bytes().to_vec(),
         bls_public_key: bls.public_key.clone(),
-        pop_signature: bls.generate_pop(),
+        pop_signature: bls.generate_pop(chain_id, address),
         pq_public_key: keys
             .pq_key
             .as_ref()
@@ -842,7 +844,7 @@ fn separate_consensus_key_transaction_activates_bonded_validator() {
         fee,
         0,
         Network::Devnet.chain_id().value(),
-        consensus_key_registration(&keys),
+        consensus_key_registration(&keys, Network::Devnet.chain_id().value(), &validator),
     );
     tx.sign(&keys.sig_key);
     state
@@ -852,7 +854,7 @@ fn separate_consensus_key_transaction_activates_bonded_validator() {
 
     let registered = state.get_validator(&validator).unwrap();
     assert!(registered.active);
-    assert!(registered.verify_pop_is_valid());
+    assert!(registered.verify_pop_is_valid(Network::Devnet.chain_id().value()));
     assert_eq!(
         registered.vrf_public_key.as_slice(),
         keys.vrf_key.public.to_bytes().as_slice(),
@@ -878,7 +880,8 @@ fn malformed_consensus_key_registration_is_atomic() {
     state.get_validator_mut(&validator).unwrap().active = false;
     let balance_before = state.get_balance(&validator);
 
-    let mut registration = consensus_key_registration(&keys);
+    let mut registration =
+        consensus_key_registration(&keys, Network::Devnet.chain_id().value(), &validator);
     registration.pop_signature[0] ^= 1;
     let mut tx = Transaction::new_consensus_key_registration(
         validator,

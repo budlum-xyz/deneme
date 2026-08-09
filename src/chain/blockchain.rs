@@ -3156,7 +3156,7 @@ impl Blockchain {
 
         let epoch_length = crate::core::chain_config::epoch_len_for_chain_id(block.chain_id);
         if block.index > 0 && block.index.is_multiple_of(epoch_length) {
-            state.advance_epoch(block.timestamp);
+            state.advance_epoch(block.timestamp, block.chain_id);
         }
 
         if block.index > 0 {
@@ -6109,14 +6109,15 @@ mod tests {
         let alice_vrf_pub = alice_keys.vrf_key.public.to_bytes().to_vec();
         let alice_bls = alice_keys.bls_key.as_ref().unwrap();
         let alice_bls_pub = alice_bls.public_key.clone();
-        let alice_bls_pop = alice_bls.generate_pop();
+        let alice_pub = Address::from(alice_key.public_key_bytes());
+        let alice_bls_pop =
+            alice_bls.generate_pop(crate::core::transaction::DEFAULT_CHAIN_ID, &alice_pub);
         let alice_pq_pub = alice_keys
             .pq_key
             .as_ref()
             .unwrap()
             .public_key_bytes()
             .to_vec();
-        let alice_pub = Address::from(alice_key.public_key_bytes());
 
         let config = PoSConfig {
             slashing_penalty: (50 * crate::core::chain_config::FIXED_POINT_SCALE) / 100,

@@ -211,7 +211,7 @@ fn no_double_burn_after_restore() {
 
     // Immediately after restore, an epoch advance at the SAME year must NOT
     // Re-burn the already-burned 2 years.
-    restored.advance_epoch(0);
+    restored.advance_epoch(0, crate::core::transaction::DEFAULT_CHAIN_ID);
     // Advance_epoch increments epoch_index by 1 (still within year 2), so due
     // Years is still 2 -> nothing new burns.
     assert_eq!(restored.get_balance(&addrs.burn_reserve), reserve_before);
@@ -220,7 +220,7 @@ fn no_double_burn_after_restore() {
 
     // Now cross into year 3: exactly ONE new annual burn, never the prior two.
     restored.epoch_index = 3 * restored.tokenomics.epochs_per_year - 1;
-    restored.advance_epoch(0); // -> epoch_index becomes 3*epy, due=3
+    restored.advance_epoch(0, crate::core::transaction::DEFAULT_CHAIN_ID); // -> epoch_index becomes 3*epy, due=3
     let per_year = restored.tokenomics.annual_burn_amount();
     assert_eq!(restored.timed_burn.years_burned, 3);
     assert_eq!(

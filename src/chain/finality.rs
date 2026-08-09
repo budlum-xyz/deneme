@@ -175,8 +175,21 @@ pub fn checkpoint_signing_message(epoch: u64, height: u64, hash: &str) -> Vec<u8
 /// Proof-of-possession input from the IETF BLS PoP ciphersuite: the canonical
 /// Serialized public key. Chain/address binding is provided separately by the
 /// Validator's signed `RegisterConsensusKeys` transaction.
-pub fn pop_signing_message(_chain_id: u64, _address: &Address, bls_pk: &[u8]) -> Vec<u8> {
-    bls_pk.to_vec()
+pub fn pop_signing_message(chain_id: u64, address: &Address, bls_pk: &[u8]) -> Vec<u8> {
+    // R11: a proof of possession over only the public key replays across
+    // chains and accounts: the same PoP produced for chain A is accepted
+    // for chain B, so an operator slashed on one chain can re-register the
+    // same key elsewhere without a fresh possession proof. Bind the message
+    // to the chain id and the account address it is registered for. The
+    // fields are fixed-length (8 + 32 + 96), so the encoding is injective
+    // without length prefixes; the domain tag keeps it distinct from any
+    // other BLS message in the tree.
+    let mut msg = Vec::with_capacity(14 + 8 + 32 + bls_pk.len());
+    msg.extend_from_slice(b"BDLM_BLS_POP_V1");
+    msg.extend_from_slice(&chain_id.to_le_bytes());
+    msg.extend_from_slice(address.as_bytes());
+    msg.extend_from_slice(bls_pk);
+    msg
 }
 
 /// Wire-visible identifier for the RFC 9380 random-oracle suite used by all

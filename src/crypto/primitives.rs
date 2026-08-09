@@ -169,40 +169,31 @@ impl BlsKeypair {
         })
     }
 
-    /// Generate the canonical proof of possession for this public key.
-    pub fn generate_pop(&self) -> Vec<u8> {
-        let msg = crate::chain::finality::pop_signing_message(
-            0,
-            &crate::core::address::Address::zero(),
-            &self.public_key,
-        );
+    /// Generate the canonical proof of possession for this public key,
+    /// bound to the chain id and account address it will be registered
+    /// under (R11: a PoP over only the key replays across chains).
+    pub fn generate_pop(&self, chain_id: u64, address: &crate::core::address::Address) -> Vec<u8> {
+        let msg = crate::chain::finality::pop_signing_message(chain_id, address, &self.public_key);
         crate::chain::finality::sign_bls_pop(&self.secret_key, &msg)
     }
 
-    /// Deprecated compatibility entry point. Registration context is authenticated
-    /// By the signed transaction; the IETF PoP itself is canonically over the
-    /// Public key. New ceremony tooling must call [`Self::generate_pop`] directly.
-    #[deprecated(
-        note = "use generate_pop(); chain/address binding is provided by the signed registration transaction"
-    )]
-    pub fn generate_pop_for_registration(
-        &self,
-        _chain_id: u64,
-        _address: &crate::core::address::Address,
-    ) -> Vec<u8> {
-        self.generate_pop()
-    }
-
     /// Verify the canonical PoP without a validator registration wrapper.
-    pub fn verify_pop(public_key: &[u8], pop: &[u8]) -> Result<(), CryptoError> {
+    /// The PoP must be bound to the given chain id and address (R11): a
+    /// PoP produced for another chain or account is rejected.
+    pub fn verify_pop(
+        public_key: &[u8],
+        pop: &[u8],
+        chain_id: u64,
+        address: &crate::core::address::Address,
+    ) -> Result<(), CryptoError> {
         let entry = crate::chain::finality::ValidatorEntry {
-            address: crate::core::address::Address::zero(),
+            address: *address,
             stake: 0,
             bls_public_key: public_key.to_vec(),
             pop_signature: pop.to_vec(),
             pq_public_key: Vec::new(),
         };
-        if crate::chain::finality::verify_pop(&entry, 0) {
+        if crate::chain::finality::verify_pop(&entry, chain_id) {
             Ok(())
         } else {
             Err(CryptoError::Verification(
@@ -869,25 +860,45 @@ fn test_mainnet_disk_keys_forbidden_when_plaintext_bls_pq_present() {
     assert!(keys.validate_mainnet_disk_policy(false).is_ok());
 }
 
-/// RFC 9380 PoP generation is bound to the canonical public key.
+/// RFC 9380 PoP generation is bound to the canonical public key, the chain
+/// id and the account address it is registered under (R11).
 #[test]
 fn test_bls_proof_of_possession() {
+    use crate::core::address::Address;
+    use crate::core::transaction::DEFAULT_CHAIN_ID;
+
     let kp = BlsKeypair::generate().expect("generate");
-    let pop = kp.generate_pop();
+    let addr = Address::from([1u8; 32]);
+    let pop = kp.generate_pop(DEFAULT_CHAIN_ID, &addr);
     assert_eq!(pop.len(), 48, "BLS PoP must be a compressed G1 point");
-    assert!(BlsKeypair::verify_pop(&kp.public_key, &pop).is_ok());
+    assert!(BlsKeypair::verify_pop(&kp.public_key, &pop, DEFAULT_CHAIN_ID, &addr).is_ok());
 
     let entry = crate::chain::finality::ValidatorEntry {
-        address: crate::core::address::Address::from([1u8; 32]),
+        address: addr,
         stake: 0,
         bls_public_key: kp.public_key.clone(),
         pop_signature: pop,
         pq_public_key: Vec::new(),
     };
-    assert!(crate::chain::finality::verify_pop(&entry, 0));
+    assert!(crate::chain::finality::verify_pop(&entry, DEFAULT_CHAIN_ID));
+
+    // R11: the same key must not satisfy a PoP for another chain or account.
+    assert!(!crate::chain::finality::verify_pop(
+        &entry,
+        DEFAULT_CHAIN_ID + 1
+    ));
+    let mut other_account = entry.clone();
+    other_account.address = Address::from([2u8; 32]);
+    assert!(!crate::chain::finality::verify_pop(
+        &other_account,
+        DEFAULT_CHAIN_ID
+    ));
 
     let other = BlsKeypair::generate().expect("generate another key");
     let mut wrong_key = entry;
     wrong_key.bls_public_key = other.public_key;
-    assert!(!crate::chain::finality::verify_pop(&wrong_key, 0));
+    assert!(!crate::chain::finality::verify_pop(
+        &wrong_key,
+        DEFAULT_CHAIN_ID
+    ));
 }
