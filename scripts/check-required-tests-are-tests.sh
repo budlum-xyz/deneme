@@ -61,21 +61,28 @@ fail() {
 # looks ahead a few lines rather than exactly one.
 collect_marked_tests() {
   local root="$1"
-  find "$root" -name '*.rs' \
+  # Emit `path.rs:fnname` so a required test must exist as a #[test] function
+  # in the module the gate names, not merely as a same-named dummy function
+  # anywhere in the workspace (Strix MEDIUM, CWE-345, deneme round 2 PR #212).
+  # The whole pipeline runs inside a subshell rooted at `$root` so `find .`
+  # paths stay relative (the scope regexes anchor to real path boundaries)
+  # and `xargs` can open them.
+  (cd "$root" && find . -name '*.rs' \
     -not -path '*/target/*' \
     -not -path '*/.git/*' \
-    -print0 \
-  | xargs -0 awk '
+    -print0 | xargs -0 awk '
+      FNR == 1 { fname = FILENAME }
       /#\[(tokio::)?test\]/ { pending = 5; next }
       pending > 0 {
         if (match($0, /fn [a-z_][a-z0-9_]*/)) {
-          print substr($0, RSTART + 3, RLENGTH - 3)
+          name = substr($0, RSTART + 3, RLENGTH - 3)
+          print fname ":" name
           pending = 0
         } else {
           pending--
         }
       }
-    ' | sort -u
+    ') | sed 's#^\./##' | sort -u
 }
 
 # Pull the identifiers out of a `required_tests=( ... )` array.
@@ -83,6 +90,21 @@ collect_marked_tests() {
 # that is exactly `)` closes it. The loose version of this matched the string
 # where it appears inside a comment, including in this file, and then ran to
 # the end of the script collecting shell keywords as test names.
+# The scope a gate's required tests must live in, read from the declaring
+# script's `required_tests_scope=` variable. A same-named test in another
+# crate must not satisfy a gate meant to protect a specific module tree
+# (Strix MEDIUM, CWE-345, PR #145 follow-up).
+required_test_scope() {
+  local script="$1"
+  local scope
+  scope="$(sed -n 's/^[[:space:]]*required_tests_scope="\(.*\)"[[:space:]]*$/\1/p' "$script" | head -1)"
+  if [ -z "$scope" ]; then
+    echo ".*"
+  else
+    echo "$scope"
+  fi
+}
+
 collect_required_names() {
   local script="$1"
   awk '
@@ -115,7 +137,32 @@ check_required() {
     while IFS= read -r name; do
       [ -n "$name" ] || continue
       total=$((total + 1))
-      if ! grep -qxF "$name" <<<"$marked"; then
+      # Bind the required name to a single concrete Rust function. The marked
+      # set carries full `path.rs:fn` entries; the name must match exactly
+      # one marked test AND exactly one `fn <name>` in the whole workspace.
+      # That second condition closes the "same-named test in another crate"
+      # hole: if the intended invariant test stops being a test but an
+      # unrelated `#[test] fn <name>` exists elsewhere, the test count is
+      # still 1 while the function count is 2 (Strix MEDIUM, CWE-345, PR
+      # #145 follow-up).
+      local scope_pattern scope_regex test_matches function_matches
+      scope_pattern="$(required_test_scope "$script")"
+      # Anchor the scope to a real path boundary so a sibling like
+      # `src/coreevil/` cannot satisfy a `src/core` scope (Strix MEDIUM,
+      # CWE-345, PR #145 follow-up).
+      scope_regex="^(${scope_pattern})(/|\.rs$|$)"
+      test_matches="$(awk -F: -v n="$name" -v scope="$scope_regex" '
+        $NF == n && $1 ~ scope { c++ }
+        END { print c + 0 }
+      ' <<<"$marked")"
+      function_matches="$(find "$root" -name '*.rs' -not -path '*/target/*' -not -path '*/.git/*' -print0 | xargs -0 awk -v t="$name" '
+        match($0, /fn [a-z_][a-z0-9_]*/) {
+          current = substr($0, RSTART + 3, RLENGTH - 3)
+          if (current == t) { c++ }
+        }
+        END { print c + 0 }
+      ')"
+      if [ "$test_matches" -ne 1 ] || [ "$function_matches" -ne 1 ]; then
         missing+=("$name")
       fi
     done <<<"$names"

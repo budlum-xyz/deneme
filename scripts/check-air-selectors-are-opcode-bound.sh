@@ -68,6 +68,46 @@ if not os.path.isfile(isa):
 air_src = open(air, encoding="utf-8").read()
 isa_src = open(isa, encoding="utf-8").read()
 
+# Scan only executable Rust: line comments, block comments and string
+# literals are stripped before any evidence regex runs, otherwise a
+# contributor could satisfy the gate with `is_ADD.clone() * (opcode_here - op(0x10))`
+# written inside a comment or string while the live selector stays free
+# (Strix MEDIUM, CWE-1286, deneme round 2 PR #217).
+def strip_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`); a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail looking
+    # like executable code (Strix MEDIUM, CWE-180, PR #145 follow-up).
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            i += 2
+            continue
+        if depth:
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def strip_non_code(text):
+    text = re.sub(r"//[^\n]*", "", text)
+    text = strip_block_comments(text)
+    text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+    text = re.sub(r"'(?:\\.|[^'\\])*'", "''", text)
+    return text
+
+air_src = strip_non_code(air_src)
+isa_src = strip_non_code(isa_src)
+
 # The ISA is the source of truth for which opcodes exist and what they encode
 # to. Read the discriminants off the enum rather than a hand kept list here,
 # so adding an opcode cannot silently leave this gate behind.
@@ -280,7 +320,19 @@ pub const COL_IS_MUL: usize = 13;' "$good_isa"
     exit 1
   fi
 
-  echo "AIR selector binding gate self-test OK: an unbound selector, a selector bound to the wrong opcode, an opcode with no selector, a deleted binding sum, an AIR with no selectors, an ISA with no opcodes and a missing tree are all rejected; a fully bound AIR passes."
+  # 9. A binding written only inside a nested block comment is inert text:
+  #    the live AIR still has no binding sum (Strix MEDIUM, CWE-180,
+  #    PR #145 follow-up).
+  mk "$tmp/nestedc" 'pub const COL_IS_HALT: usize = 19;
+pub const COL_IS_ADD: usize = 11;
+pub const COL_IS_MUL: usize = 13;
+        /* outer /* inner */ let selector_opcode_binding = is_halt.clone() * (opcode_here.clone() - op(0x00)); */' "$good_isa"
+  if ( scan "$tmp/nestedc" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a binding inside a nested block comment was accepted as real code!" >&2
+    exit 1
+  fi
+
+  echo "AIR selector binding gate self-test OK: an unbound selector, a selector bound to the wrong opcode, an opcode with no selector, a deleted binding sum, an AIR with no selectors, an ISA with no opcodes, a missing tree and a binding hidden in a nested comment are all rejected; a fully bound AIR passes."
 }
 
 if [ "${1:-}" = "--self-test" ]; then
