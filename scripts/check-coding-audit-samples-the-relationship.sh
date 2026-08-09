@@ -68,8 +68,40 @@ for path in (erasure, deal, locks):
         sys.exit(2)
 
 
-def strip_comments(src):
-    return re.sub(r"//[^\n]*", "", src)
+def strip_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`); a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail looking
+    # like executable code (Strix MEDIUM, CWE-180, PR #145 follow-up).
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            i += 2
+            continue
+        if depth:
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def strip_non_code(src):
+    # Strip line comments, block comments and string/char literals so
+    # identifiers inside /* ... */ or literals cannot satisfy the gate
+    # (Strix MEDIUM, CWE-184, deneme round 2 PR #229).
+    src = re.sub(r"//[^\n]*", "", src)
+    src = strip_block_comments(src)
+    src = re.sub(r'"(?:\\.|[^"\\\n]|\\\n)*"', '""', src)
+    src = re.sub(r"'(?:\\.|[^'\\\n]|\\\n)*'", "''", src)
+    return src
 
 
 def body_of(src, header):
@@ -95,8 +127,8 @@ def body_of(src, header):
     return None
 
 
-erasure_code = strip_comments(open(erasure, encoding="utf-8").read())
-deal_code = strip_comments(open(deal, encoding="utf-8").read())
+erasure_code = strip_non_code(open(erasure, encoding="utf-8").read())
+deal_code = strip_non_code(open(deal, encoding="utf-8").read())
 locks_src = open(locks, encoding="utf-8").read()
 
 problems = []

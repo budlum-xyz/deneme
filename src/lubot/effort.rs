@@ -45,7 +45,7 @@
 //! ratios stand. This module exposes `EffortTier::as_ratio()` so a future fee
 //! schedule can scale against it without this type having to know the price.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Fixed-point scale for effort tiers: the value is stored as tenths.
 ///
@@ -67,7 +67,7 @@ pub const TIER_MAX_TENTHS: u16 = 100;
 ///
 /// Construct through [`EffortTier::from_tenths`] so the range is always
 /// enforced; the inner value is public for serialization only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct EffortTier(u16);
 
 impl EffortTier {
@@ -131,6 +131,22 @@ impl EffortTier {
     #[must_use]
     pub const fn servable_by(&self, ceiling: EffortTier) -> bool {
         self.0 <= ceiling.0
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for EffortTier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // A JSON-RPC caller can submit any u16, so the derived Deserialize
+        // would admit out-of-range tiers (0, 4, 65535) that from_tenths
+        // rejects; those values then flow into request_id and the signature
+        // unchecked. Deserialize through from_tenths so the 0.5x..=10.0x
+        // invariant holds on every entry path (Strix MEDIUM, CWE-20, deneme
+        // round 2 PR #194).
+        let tenths = u16::deserialize(deserializer)?;
+        Self::from_tenths(tenths).map_err(serde::de::Error::custom)
     }
 }
 
