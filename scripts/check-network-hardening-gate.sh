@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+required_tests_scope="src/(network|tests/hardening_h5_h7_locks)"
 required_tests=(
   rate_limit_exhaustion_uses_dedicated_penalty
   repeated_rate_limit_exhaustion_bans_peer
