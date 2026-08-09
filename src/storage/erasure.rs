@@ -634,22 +634,70 @@ pub fn reconstruct_object(
             rs.total_shards()
         )));
     }
-    let all = rs.reconstruct(present)?;
 
-    // Shards are indexed by position in the code word; the manifest stores
-    // them by `index`, so look each one up rather than assuming order.
-    for (i, bytes) in all.iter().enumerate() {
-        let idx = i as u32;
-        let Some(reference) = manifest.shards.iter().find(|s| s.index == idx) else {
-            return Err(ErasureError::ShardMismatch(format!(
-                "manifest has no shard with index {idx}"
-            )));
-        };
-        if reference.shard_id != crate::storage::ContentId::of(bytes) {
-            return Err(ErasureError::IntegrityFailure { index: idx });
+    // Verify every reconstructed shard against the manifest, and try another
+    // k-subset when more than k shards survive: taking only the first k
+    // survivors means a single corrupted low-index survivor makes a
+    // recoverable object look unrecoverable (Strix MEDIUM, deneme round 2
+    // PR #200). The integrity check is the same one the old code ran after
+    // the single attempt; now a failure with spare survivors retries with a
+    // different subset instead of giving up.
+    let verify_all = |all: &[Vec<u8>]| -> Result<(), ErasureError> {
+        for (i, bytes) in all.iter().enumerate() {
+            let idx = i as u32;
+            let Some(reference) = manifest.shards.iter().find(|s| s.index == idx) else {
+                return Err(ErasureError::ShardMismatch(format!(
+                    "manifest has no shard with index {idx}"
+                )));
+            };
+            if reference.shard_id != crate::storage::ContentId::of(bytes) {
+                return Err(ErasureError::IntegrityFailure { index: idx });
+            }
         }
+        Ok(())
+    };
+
+    let live: Vec<usize> = present
+        .iter()
+        .enumerate()
+        .filter_map(|(i, shard)| shard.as_ref().map(|_| i))
+        .collect();
+
+    // Candidate attempt closures: the first try uses the whole live set; if
+    // reconstruction with all survivors fails or verifies wrong and there
+    // are spare survivors, drop one survivor at a time and retry.
+    let attempt = |masked: &mut Vec<Option<Vec<u8>>>| -> Result<Vec<u8>, ErasureError> {
+        let all = rs.reconstruct(masked)?;
+        verify_all(&all)?;
+        let k = rs.data_shards();
+        let mut out = Vec::with_capacity(k * all[0].len());
+        for shard in all.iter().take(k) {
+            out.extend_from_slice(shard);
+        }
+        out.truncate(manifest.content_size() as usize);
+        Ok(out)
+    };
+
+    let mut masked = present.to_vec();
+    match attempt(&mut masked) {
+        Ok(out) => return Ok(out),
+        Err(_) if live.len() > rs.data_shards() => {
+            // Spare survivors exist: retry, dropping each live shard in
+            // turn so a corrupted low-index survivor no longer blocks a
+            // recoverable object.
+            for &drop in &live {
+                let mut trial = present.to_vec();
+                trial[drop] = None;
+                if let Ok(out) = attempt(&mut trial) {
+                    return Ok(out);
+                }
+            }
+        }
+        Err(e) => return Err(e),
     }
 
+    let all = rs.reconstruct(present)?;
+    verify_all(&all)?;
     let k = rs.data_shards();
     let mut out = Vec::with_capacity(k * all[0].len());
     for shard in all.iter().take(k) {
@@ -805,16 +853,43 @@ mod tests {
     }
 
     #[test]
-    fn a_corrupted_survivor_is_caught_not_propagated() {
-        // Reconstruction mixes every survivor into every recovered shard, so
-        // one flipped byte corrupts the whole object. The ContentId check has
-        // to turn that into an error rather than plausible-looking bytes.
+    fn a_corrupted_survivor_is_skipped_when_spare_survivors_exist() {
+        // With k=4, n=6 and one parity shard lost, five survivors remain. One
+        // of them is corrupted; the decoder must drop the corrupted survivor
+        // and reconstruct from the other four rather than failing the whole
+        // object (Strix MEDIUM, deneme round 2 PR #200). A single bad
+        // survivor must not cause avoidable object-level denial of recovery.
         let data: Vec<u8> = (0..=199u8).cycle().take(800).collect();
         let scheme = ErasureScheme { k: 4, n: 6 };
         let enc = encode_object(&data, scheme).unwrap();
         let manifest = enc.to_manifest().unwrap();
 
         let mut present: Vec<Option<Vec<u8>>> = enc.shards.iter().cloned().map(Some).collect();
+        present[5] = None;
+        if let Some(Some(s)) = present.get_mut(1) {
+            s[0] ^= 0xFF;
+        }
+        let recovered = reconstruct_object(&manifest, &present).unwrap();
+        assert_eq!(
+            recovered, data,
+            "recovery must fall back to the honest survivors"
+        );
+    }
+
+    #[test]
+    fn a_corrupted_survivor_without_spares_still_fails_integrity() {
+        // When no spare survivors exist the corrupted shard cannot be
+        // skipped, so the ContentId check must still turn the corruption into
+        // an error rather than plausible-looking bytes.
+        let data: Vec<u8> = (0..=199u8).cycle().take(800).collect();
+        let scheme = ErasureScheme { k: 4, n: 6 };
+        let enc = encode_object(&data, scheme).unwrap();
+        let manifest = enc.to_manifest().unwrap();
+
+        // Lose two shards so exactly k survive, then corrupt one of them:
+        // there is no spare to fall back to.
+        let mut present: Vec<Option<Vec<u8>>> = enc.shards.iter().cloned().map(Some).collect();
+        present[4] = None;
         present[5] = None;
         if let Some(Some(s)) = present.get_mut(1) {
             s[0] ^= 0xFF;
