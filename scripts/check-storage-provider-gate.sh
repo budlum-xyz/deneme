@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+required_tests_scope="src/(storage|domain/storage_deal)"
 required_tests=(
   storage_provider_put_get_roundtrip
   storage_provider_rejects_invalid_range

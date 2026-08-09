@@ -1506,19 +1506,31 @@ impl AccountState {
             }
             ProposalType::SlashValidator {
                 address,
-                evidence_hash: _,
+                evidence_hash,
             } => {
-                // Governance slash now requires evidence.
-                // The target address must have at least one slashing record in history.
-                // The evidence_hash serves as a commitment to specific evidence
-                // (defense-in-depth: prevents arbitrary slashing without proof).
-                let has_evidence = self
-                    .registry
-                    .slashing_history_for(address)
-                    .iter()
-                    .any(|record| record.report.offender == *address);
-                if !has_evidence {
-                    tracing::warn!("Rejecting SlashValidator {address}: no slashing evidence in registry history");
+                // Governance slash now requires evidence, and the committed
+                // evidence_hash must match a real slashing record in the
+                // registry. Before this check the hash was discarded and any
+                // historical slashing record for the address was enough, so a
+                // proposal could claim one evidence hash while zeroing stake
+                // on unrelated past evidence (Strix MEDIUM, CWE-345, deneme
+                // round 2 PR #178). The hash is the bincode serialization of
+                // the report that was actually slashed, so a passed proposal
+                // names the exact evidence it relies on.
+                let evidence_matches =
+                    self.registry
+                        .slashing_history_for(address)
+                        .iter()
+                        .any(|record| {
+                            use sha2::{Digest, Sha256};
+                            let bytes = bincode::serialize(&record.report)
+                                .expect("SlashingReport must serialize");
+                            Sha256::digest(&bytes).as_slice() == evidence_hash
+                        });
+                if !evidence_matches {
+                    tracing::warn!(
+                        "Rejecting SlashValidator {address}: no slashing record matching the committed evidence_hash in registry history"
+                    );
                 } else if let Some(v) = self.validators.get_mut(address) {
                     v.slashed = true;
                     v.active = false;
