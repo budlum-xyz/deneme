@@ -28,8 +28,19 @@ impl Executor {
         state: &mut AccountState,
         tx: &Transaction,
     ) -> BudlumResult<()> {
+        // The zero address is not a sender: only the canonical genesis
+        // transaction may originate from it, and it is rejected everywhere
+        // but the genesis block by `validate_and_add_block`. Accepting any
+        // zero-address sender here would let an attacker fill blocks with
+        // free, unsigned, fee-free transactions (BUDLUM bulgu #65/#171).
         if tx.from == Address::zero() {
-            return Ok(());
+            if tx.verify() {
+                return Ok(());
+            }
+            return Err(BudlumError::validation(
+                "zero_address_sender_forbidden",
+                "the zero address cannot originate transactions outside the canonical genesis transaction",
+            ));
         }
         if state.burn_reserve_address == Some(tx.from) {
             return Err(BudlumError::validation(

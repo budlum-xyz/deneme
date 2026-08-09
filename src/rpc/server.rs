@@ -1701,6 +1701,9 @@ impl BudlumApiServer for RpcServer {
         domain_params: crate::domain::storage_params::StorageDomainParams,
         merkle_proof: Option<Vec<u8>>,
         storage_root: Option<crate::domain::Hash32>,
+        request_id: u64,
+        payer_signature: String,
+        operator_signature: String,
     ) -> Result<serde_json::Value, ErrorObjectOwned> {
         let clean_shard = shard_id.strip_prefix("0x").unwrap_or(&shard_id);
         let s_bytes = hex::decode(clean_shard).map_err(|e| {
@@ -1723,6 +1726,81 @@ impl BudlumApiServer for RpcServer {
 
         let payer_addr = Address::from_hex(&payer).map_err(|e| {
             ErrorObjectOwned::owned(-32602, format!("Invalid payer hex: {e}"), None::<()>)
+        })?;
+
+        // The caller must prove control of BOTH addresses this call debits:
+        // the payer's escrow and the operator's bond. Without this, any
+        // caller that can reach the RPC listener can spend another user's
+        // balance and lock another operator's bond. The signed message binds
+        // every deal parameter that changes the debit, so a signature cannot
+        // be replayed against a different deal. This is the same pattern the
+        // challenge RPCs use (BUD_OPEN_CHALLENGE_V1 / BUD_ANSWER_CHALLENGE_V1),
+        // which is what makes the escrow and bond gates economically
+        // meaningful.
+        let payer_sig = hex::decode(payer_signature).map_err(|e| {
+            ErrorObjectOwned::owned(
+                -32602,
+                format!("Invalid payer_signature hex: {e}"),
+                None::<()>,
+            )
+        })?;
+        let operator_sig = hex::decode(operator_signature).map_err(|e| {
+            ErrorObjectOwned::owned(
+                -32602,
+                format!("Invalid operator_signature hex: {e}"),
+                None::<()>,
+            )
+        })?;
+
+        // The chain prices the payer escrow from the manifest entry for this
+        // shard (manifest.shard(&shard_id).size), so the signed preimage must
+        // bind that size and the manifest identity as well. Without them, a
+        // valid signature could be replayed with a forged manifest that
+        // declares a larger shard for the same shard_id and debits more than
+        // either signer authorized (Strix HIGH, CWE-347).
+        let shard_bytes = manifest
+            .shard(&s_id)
+            .ok_or_else(|| {
+                ErrorObjectOwned::owned(
+                    -32602,
+                    format!("shard {s_id:?} is not part of the manifest"),
+                    None::<()>,
+                )
+            })
+            .map(|shard| u64::from(shard.size))?;
+
+        // The signed preimage binds a caller-chosen `request_id` so one
+        // signed authorization cannot be replayed to open the same deal
+        // repeatedly and debit escrow and bond again (Strix MEDIUM, CWE-294).
+        // The chain also refuses a second active deal over the same
+        // (manifest, shard, operator, replica, range), so replay is closed on
+        // both layers.
+        let deal_msg = crate::core::hash::hash_fields_bytes(&[
+            b"BUD_OPEN_DEAL_V1",
+            &domain_id.to_le_bytes(),
+            s_id.as_bytes(),
+            op_addr.as_bytes(),
+            payer_addr.as_bytes(),
+            &replica_index.to_le_bytes(),
+            &start_epoch.to_le_bytes(),
+            &end_epoch.to_le_bytes(),
+            &shard_bytes.to_le_bytes(),
+            manifest.manifest_id.as_bytes(),
+            &economics.fee_per_byte_epoch.to_le_bytes(),
+            &economics.operator_bond.to_le_bytes(),
+            &request_id.to_le_bytes(),
+        ]);
+        crate::crypto::primitives::verify_signature(&deal_msg, &payer_sig, payer_addr.as_bytes())
+            .map_err(|e| {
+            ErrorObjectOwned::owned(-32602, format!("Invalid payer signature: {e}"), None::<()>)
+        })?;
+        crate::crypto::primitives::verify_signature(&deal_msg, &operator_sig, op_addr.as_bytes())
+            .map_err(|e| {
+            ErrorObjectOwned::owned(
+                -32602,
+                format!("Invalid operator signature: {e}"),
+                None::<()>,
+            )
         })?;
 
         let deal_id = self

@@ -330,6 +330,9 @@ pub trait BudlumApi {
         domain_params: crate::domain::storage_params::StorageDomainParams,
         merkle_proof: Option<Vec<u8>>,
         storage_root: Option<crate::domain::Hash32>,
+        request_id: u64,
+        payer_signature: String,
+        operator_signature: String,
     ) -> Result<serde_json::Value, ErrorObjectOwned>;
 
     /// Look up a previously-registered `ContentManifest` by its

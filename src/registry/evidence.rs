@@ -34,7 +34,7 @@
 //! proof of an equivocation paid to be ignored, which is the opposite of the
 //! incentive a permissionless reporting channel needs.
 //!
-//! [`SlashingReport::verify_double_sign`] is the answer. A double-sign proof
+//! `SlashingReport::verify_double_sign` (test-only since the Strix CWE-347 fix) is the answer. A double-sign proof
 //! does not need a trusted sender: it carries two signatures by the offender
 //! over two different block hashes at one height, and only the offender's key
 //! can produce that pair. The chain checks the pair itself, before charging
@@ -163,7 +163,7 @@ pub enum EvidenceError {
     /// A double-sign proof names a role other than validator. Only a
     /// validator produces the signed headers this proof is built from.
     WrongRoleForProof,
-    /// [`SlashingReport::verify_double_sign`] was handed a proof that is not
+    /// `SlashingReport::verify_double_sign` was handed a proof that is not
     /// a double-sign proof. The other conditions are not provable from the
     /// report alone; see the note on the RPC path.
     WrongProofForVerification,
@@ -520,6 +520,11 @@ impl SlashingReport {
     /// [`EvidenceError`] naming the first check that failed. A caller must
     /// treat every error as "not proven" rather than "proven innocent": a
     /// malformed report is not evidence of anything.
+    /// Test-only since the Strix CWE-347 fix: the permissionless RPC path no
+    /// longer promotes `Unverified` reports, and the consensus path verifies
+    /// equivocation at ingest against the validator snapshot, so this raw
+    /// signature-over-two-hashes check survives as a regression harness.
+    #[cfg(test)]
     pub fn verify_double_sign(&self) -> Result<(), EvidenceError> {
         self.validate_shape()?;
 
@@ -563,7 +568,10 @@ impl SlashingReport {
 }
 
 /// Decode a block hash from the hex a report carries into the bytes that were
-/// signed.
+/// signed. Test-only like `verify_double_sign`: production no longer
+/// verifies raw signature-over-two-hashes evidence since the Strix CWE-347
+/// fix.
+#[cfg(test)]
 fn decode_block_hash(hex_hash: &str) -> Result<[u8; 32], EvidenceError> {
     let raw = hex::decode(hex_hash).map_err(|_| EvidenceError::MalformedBlockHash)?;
     raw.try_into()

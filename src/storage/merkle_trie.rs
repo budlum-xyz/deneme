@@ -34,6 +34,15 @@ impl MerkleProof {
         }
         let mut current = self.leaf_hash;
         for i in 0..TRIE_DEPTH {
+            // The path is keyed by the address the proof claims: at each
+            // level the direction must match the corresponding bit of
+            // `self.address`, or the proof is for a different key and must
+            // not verify. Without this, a caller could relabel a valid proof
+            // as belonging to another address (Strix LOW, CWE-345).
+            let expected_direction = get_bit(&self.address, TRIE_DEPTH - 1 - i);
+            if self.directions[i] != expected_direction {
+                return false;
+            }
             let (left, right) = if self.directions[i] {
                 (self.siblings[i], current)
             } else {

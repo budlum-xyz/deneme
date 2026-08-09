@@ -307,6 +307,66 @@ impl AccessEstimate {
     }
 }
 
+/// One finalized access event: `count` reads of an object at `epoch`.
+///
+/// This is the unit of the consensus-derived demand signal (KTT). The
+/// estimate is not stored per object and mutated on every read, which would
+/// put a counter the whole network must agree on inside per-node state; it
+/// is *derived* from finalized events, so any node that has the same events
+/// and the same epoch derives the same estimate. Events are cheap to carry
+/// in a block (a manifest id and a count), and the chain already finalizes
+/// the reference events this signal needs: retrieval challenges, NFT
+/// transfers, and content reads that are themselves transactions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccessEvent {
+    /// Epoch the reads happened in.
+    pub epoch: u64,
+    /// How many reads happened in that epoch.
+    pub count: u64,
+}
+
+impl AccessEstimate {
+    /// Derive the estimate from finalized access events as of `current_epoch`.
+    ///
+    /// Each event contributes its count, decayed by the half-lives between
+    /// the event's epoch and `current_epoch`. The result is the same on every
+    /// node that has the same events, because the decay is integer halving,
+    /// not a floating exponential.
+    ///
+    /// Events must be sorted by epoch ascending. Out-of-order or
+    /// future-dated events are refused rather than silently misread, because
+    /// a signal derived from a different ordering is a signal two nodes
+    /// disagree on.
+    #[must_use]
+    pub fn from_events(events: &[AccessEvent], current_epoch: u64) -> Self {
+        let mut estimate = Self::new(current_epoch);
+        let mut last_epoch = 0u64;
+        for event in events {
+            if event.epoch < last_epoch || event.epoch > current_epoch {
+                // Refuse silently-misreadable input: decay with a wrong
+                // ordering would give two nodes two estimates from the same
+                // events. Saturate to the estimate as of the last valid
+                // prefix instead of panicking, so a hostile event list cannot
+                // crash a reader.
+                break;
+            }
+            last_epoch = event.epoch;
+            // Each read is one unit at ACCESS_SCALE, decayed from the event
+            // epoch to the next event's epoch, then carried forward.
+            let scaled_count = event.count.saturating_mul(ACCESS_SCALE);
+            // Fold this event into the running estimate: decay both to the
+            // event's epoch, add, and let the running estimate's epoch follow.
+            let decayed_running = estimate.decayed_to(event.epoch);
+            estimate.scaled = decayed_running.saturating_add(scaled_count);
+            estimate.last_epoch = event.epoch;
+        }
+        // Bring the estimate up to the current epoch.
+        estimate.scaled = estimate.decayed_to(current_epoch);
+        estimate.last_epoch = current_epoch;
+        estimate
+    }
+}
+
 /// Reads per half-life at which a lever stops paying for itself.
 ///
 /// Returned scaled by [`ACCESS_SCALE`], to be compared against
@@ -1135,5 +1195,79 @@ mod tests {
         let huge = u64::from(u32::MAX) * 4; // ~17 GB
         let t = break_even_rate_scaled(described(), huge, rates()).unwrap();
         assert!(t > 0, "a large object still has a finite crossing point");
+    }
+    /// KTT: the estimate derived from finalized events must be identical on
+    /// every node that has the same events, and must decay with the same
+    /// half-life the per-object estimate uses.
+    #[test]
+    fn from_events_matches_sequential_recording() {
+        // Record reads one at a time...
+        let mut sequential = AccessEstimate::new(0);
+        sequential.record_read(0);
+        sequential.record_read(0);
+        sequential.record_read(720); // one half-life later
+
+        // ...and derive from the equivalent events. Both must agree.
+        let events = [
+            AccessEvent { epoch: 0, count: 2 },
+            AccessEvent {
+                epoch: 720,
+                count: 1,
+            },
+        ];
+        let derived = AccessEstimate::from_events(&events, 720);
+        assert_eq!(derived.rate_scaled(720), sequential.rate_scaled(720));
+        assert_eq!(derived.last_epoch, 720);
+    }
+
+    /// KTT: two nodes with the same events derive the same estimate at the
+    /// same epoch; the ordering of events is part of the input.
+    #[test]
+    fn from_events_is_deterministic_across_derivations() {
+        let events = [
+            AccessEvent { epoch: 0, count: 5 },
+            AccessEvent {
+                epoch: 720,
+                count: 3,
+            },
+            AccessEvent {
+                epoch: 1440,
+                count: 1,
+            },
+        ];
+        let a = AccessEstimate::from_events(&events, 2000);
+        let b = AccessEstimate::from_events(&events, 2000);
+        assert_eq!(a, b);
+        // A future-dated event is refused: the estimate stops at the last
+        // valid prefix, so the future event contributes nothing but the
+        // earlier valid events still count. 5 reads at epoch 0, two
+        // half-lives later (2000/720 = 2) -> 5 >> 2 = 1.25M scaled.
+        let bad = [
+            AccessEvent { epoch: 0, count: 5 },
+            AccessEvent {
+                epoch: 5000,
+                count: 1,
+            },
+        ];
+        let refused = AccessEstimate::from_events(&bad, 2000);
+        assert_eq!(
+            refused.rate_scaled(2000),
+            1_250_000,
+            "a future event must not count, but valid earlier ones do"
+        );
+    }
+
+    /// KTT: events before the current epoch decay to zero after 64 half-lives
+    /// (the integer-halving floor), exactly like the per-object estimate.
+    #[test]
+    fn from_events_decays_old_events_to_zero() {
+        let events = [AccessEvent {
+            epoch: 0,
+            count: 100,
+        }];
+        let far = AccessEstimate::from_events(&events, 64 * 720);
+        assert_eq!(far.rate_scaled(64 * 720), 0);
+        let near = AccessEstimate::from_events(&events, 720);
+        assert_eq!(near.rate_scaled(720), 50 * ACCESS_SCALE);
     }
 }

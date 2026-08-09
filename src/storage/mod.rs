@@ -30,8 +30,10 @@ pub mod lrc;
 pub mod manifest;
 pub mod merkle_trie;
 pub mod mobile_self;
+pub mod msr;
 pub mod provider;
 pub mod pruning;
+pub mod render;
 pub mod traits;
 
 pub use assignment::{
@@ -69,8 +71,13 @@ pub use manifest::{
 pub use mobile_self::{
     MobileAvailabilityClass, MobileSelfContentPolicy, MobileSelfProfile, ReplicaRecommendation,
 };
+pub use msr::{
+    lrc_repair_traffic_scaled, msr_repair_traffic_scaled, msr_speedup_over_lrc_scaled, MsrError,
+    TRAFFIC_SCALE,
+};
 pub use provider::{
     provider_challenge_id, ChallengeId, DealId, InMemoryStorageProvider, ProviderChallengeResult,
     PutReceipt, StorageProof, StorageProvider, StorageProviderError,
 };
 pub use pruning::{NodeMode, PruningPolicy};
+pub use render::{render, render_and_verify, RenderError, RenderFormat};

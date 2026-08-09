@@ -79,7 +79,13 @@ impl Mempool {
         // Accepting into mempool. Without this, an attacker can flood the
         // Mempool with invalid-signature transactions that propagate via
         // Gossip, wasting every node's CPU on signature verification.
-        if tx.from != crate::core::address::Address::zero() && !tx.verify() {
+        //
+        // `Transaction::verify` already accepts the canonical genesis
+        // transaction (zero address, zero fields, no signature) and rejects
+        // every other zero-address sender, so no special case is needed
+        // here. A blanket zero-address exemption would let an attacker mint
+        // unsigned transactions from 0x00..00 (BUDLUM bulgu #19/#26).
+        if !tx.verify() {
             return Err(MempoolError::InvalidTransaction(
                 "Invalid transaction signature".into(),
             ));

@@ -1015,14 +1015,19 @@ impl Wallet {
         if !self.privacy.note_privacy_enabled {
             return Err(WalletError::NotePrivacyDisabled);
         }
-        // TEE fail-closed: do not emit plaintext note witnesses if user asked for TEE.
+        // TEE fail-closed: do not emit plaintext note witnesses if user asked
+        // for TEE. Until witness construction itself runs inside the enclave,
+        // a `tee_enabled=true` request cannot be honoured honestly: the
+        // returned intent would carry plaintext input/output notes, leaking
+        // exactly what the user asked the TEE to hide (Strix MEDIUM, deneme
+        // PR #7). Require a live runtime (fail-closed without one) and then
+        // still refuse the plaintext intent.
         if self.privacy.tee_enabled {
             let _ = self.require_tee_ready(runtime)?;
-            // Seal a domain-tagged summary so enclave path is exercised.
-            let mut probe = Vec::new();
-            probe.extend_from_slice(b"BUDLUM_TEE_PRIVATE_TRANSFER");
-            probe.extend_from_slice(&req.send_amount.to_le_bytes());
-            let _sealed = runtime.seal_private_intent(&probe)?;
+            return Err(WalletError::TeeUnavailable(
+                "TEE private-transfer witness construction is not implemented; refusing plaintext intent while tee_enabled=true"
+                    .into(),
+            ));
         }
 
         let outputs = privacy_transfer::build_outputs(&req)?;

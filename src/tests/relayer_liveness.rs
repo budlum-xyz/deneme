@@ -203,8 +203,13 @@ fn an_unprovable_report_is_refused_before_the_fee_is_taken() {
 
 #[test]
 fn a_provable_report_from_a_stranger_slashes_and_refunds() {
-    // The case the endpoint exists for and could not previously serve.
-    // Nobody vouches for the submitter; the pair of signatures does.
+    // The case the endpoint serves: a report whose provenance was already
+    // established by the consensus path (the aggregator verified both
+    // signatures against the validator snapshot at ingest) is actionable.
+    // An `Unverified` report is refused at the RPC boundary now: two valid
+    // signatures over two different hashes are not, on their own, an
+    // equivocation proof, because a validator signs one block per height
+    // and the node does not hold the rival block.
     let keys = crate::crypto::primitives::KeyPair::generate().unwrap();
     let offender = Address::from(keys.public_key_bytes());
     let reporter = addr(0x1A);
@@ -226,13 +231,13 @@ fn a_provable_report_from_a_stranger_slashes_and_refunds() {
             signature_1: keys.sign(&h1).to_vec(),
             signature_2: keys.sign(&h2).to_vec(),
         },
-        ProofProvenance::Unverified,
+        ProofProvenance::ConsensusVerified,
         Some(reporter),
     );
 
     let outcome = bc
         .submit_registry_slashing_report(report)
-        .expect("a cryptographically sound equivocation must be actionable");
+        .expect("a consensus-verified equivocation must be actionable");
     assert!(outcome.is_some(), "the equivocating validator is slashed");
     assert_eq!(
         bc.state.get_balance(&reporter),

@@ -42,12 +42,17 @@ use std::path::{Path, PathBuf};
 mod gates {
     pub mod bns_names_are_safe_in_an_address_bar;
     pub mod capability_modules_are_wired;
+    pub mod coding_audit_samples_the_relationship;
+    pub mod content_encryption_is_declared_and_bound;
     pub mod every_fuzz_target_is_run;
+    pub mod hash_inputs_are_length_prefixed;
     pub mod mermaid;
     pub mod no_new_shell_gates;
     pub mod security_scans_can_fail;
+    pub mod self_derived_ids_cover_every_field;
     pub mod suppressions_are_justified;
     pub mod the_image_builds_what_the_manifest_declares;
+    pub mod wire_fields_are_signed;
     pub mod workflows_produce_jobs;
 }
 
@@ -70,6 +75,18 @@ const GATES: &[Gate] = &[
         self_test: gates::capability_modules_are_wired::self_test,
     },
     Gate {
+        name: "coding-audit-samples-the-relationship",
+        replaces: Some("check-coding-audit-samples-the-relationship.sh"),
+        run: gates::coding_audit_samples_the_relationship::run,
+        self_test: gates::coding_audit_samples_the_relationship::self_test,
+    },
+    Gate {
+        name: "content-encryption-bound",
+        replaces: Some("check-content-encryption-is-declared-and-bound.sh"),
+        run: gates::content_encryption_is_declared_and_bound::run,
+        self_test: gates::content_encryption_is_declared_and_bound::self_test,
+    },
+    Gate {
         name: "mermaid",
         replaces: None,
         run: gates::mermaid::run,
@@ -88,6 +105,12 @@ const GATES: &[Gate] = &[
         self_test: gates::security_scans_can_fail::self_test,
     },
     Gate {
+        name: "self-derived-ids-cover-every-field",
+        replaces: Some("check-self-derived-ids-cover-every-field.sh"),
+        run: gates::self_derived_ids_cover_every_field::run,
+        self_test: gates::self_derived_ids_cover_every_field::self_test,
+    },
+    Gate {
         name: "suppressions-are-justified",
         replaces: None,
         run: gates::suppressions_are_justified::run,
@@ -98,6 +121,18 @@ const GATES: &[Gate] = &[
         replaces: None,
         run: gates::workflows_produce_jobs::run,
         self_test: gates::workflows_produce_jobs::self_test,
+    },
+    Gate {
+        name: "hash-inputs-length-prefixed",
+        replaces: Some("check-hash-inputs-are-length-prefixed.sh"),
+        run: gates::hash_inputs_are_length_prefixed::run,
+        self_test: gates::hash_inputs_are_length_prefixed::self_test,
+    },
+    Gate {
+        name: "wire-fields-are-signed",
+        replaces: Some("check-wire-fields-are-signed.sh"),
+        run: gates::wire_fields_are_signed::run,
+        self_test: gates::wire_fields_are_signed::self_test,
     },
     Gate {
         name: "image-builds-the-manifest",

@@ -77,10 +77,10 @@
 //! `Hybrid` sits between the two and inherits both halves: the prefix is
 //! custody and can be lost, the remainder is compute and cannot.
 //!
-//! WIRING: unwired - measured: no production path constructs a
-//! `ContentSource::Generated` manifest yet. The verification path and the
-//! generators are here and tested; what is missing is the transaction that
-//! registers a described object, which is a consensus-surface change.
+//! `render.rs` now calls the generators to produce on-demand bytes, so this
+//! module is wired. What is still missing is the transaction that registers a
+//! described object as a `ContentSource::Generated` manifest, which is a
+//! consensus-surface change of its own.
 
 use crate::core::hash::hash_fields_bytes;
 use crate::storage::content_id::ContentId;

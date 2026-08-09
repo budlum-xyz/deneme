@@ -596,7 +596,8 @@ mod rpc_tests {
 
         let op_keypair = crate::crypto::primitives::KeyPair::generate().unwrap();
         let op = Address::from(op_keypair.public_key_bytes());
-        let payer = Address::from([8u8; 32]);
+        let payer_keypair = crate::crypto::primitives::KeyPair::generate().unwrap();
+        let payer = Address::from(payer_keypair.public_key_bytes());
 
         // Give payer and operator enough balance for deal fees and bond
         bc.credit_development_account(&payer, 100_000_000)
@@ -605,6 +606,33 @@ mod rpc_tests {
         bc.credit_development_account(&op, 100_000_000)
             .await
             .expect("devnet credit");
+
+        // The deal-open RPC now requires both the payer and the operator to
+        // sign the exact deal parameters. Without these, an unsigned call
+        // could spend any account the caller names (Strix HIGH, CWE-862).
+        // The preimage also binds the manifest-derived shard size and the
+        // manifest id, because the chain prices the escrow from the manifest
+        // entry; a signature must not survive a forged manifest (Strix HIGH,
+        // CWE-347). A caller-chosen request_id is bound too, so one signed
+        // authorization cannot be replayed (Strix MEDIUM, CWE-294).
+        let request_id: u64 = 7;
+        let deal_msg = crate::core::hash::hash_fields_bytes(&[
+            b"BUD_OPEN_DEAL_V1",
+            &1u32.to_le_bytes(),
+            s_id.as_bytes(),
+            op.as_bytes(),
+            payer.as_bytes(),
+            &0u8.to_le_bytes(),
+            &10u64.to_le_bytes(),
+            &100u64.to_le_bytes(),
+            &u64::from(manifest.shards[0].size).to_le_bytes(),
+            manifest.manifest_id.as_bytes(),
+            &10u64.to_le_bytes(),
+            &2_000_000u64.to_le_bytes(),
+            &request_id.to_le_bytes(),
+        ]);
+        let payer_sig = payer_keypair.sign(&deal_msg).to_vec();
+        let op_sig = op_keypair.sign(&deal_msg).to_vec();
 
         let deal_res = server
             .storage_open_deal(
@@ -623,6 +651,9 @@ mod rpc_tests {
                 crate::domain::storage_params::StorageDomainParams::default(),
                 Some(valid_merkle_proof()),
                 Some([0x42u8; 32]),
+                request_id,
+                hex::encode(payer_sig.clone()),
+                hex::encode(op_sig.clone()),
             )
             .await
             .unwrap();
@@ -694,6 +725,134 @@ mod rpc_tests {
             "retrieval results must not be presented as full Proof-of-Storage"
         );
         assert_eq!(outcome["proof_kind"], "interim_availability_only");
+
+        // Strix HIGH (CWE-862) regression: an unsigned deal open must be
+        // refused before any balance changes. The signatures are required,
+        // so an empty/forged pair is rejected by the RPC, never reaching the
+        // chain path that debits escrow and locks bond.
+        let unsigned = server
+            .storage_open_deal(
+                1,
+                manifest.clone(),
+                format!("0x{}", hex::encode(s_id.0)),
+                format!("0x{}", op.to_hex()),
+                format!("0x{}", payer.to_hex()),
+                0,
+                10,
+                100,
+                crate::domain::storage_deal::StorageEconomicsParams {
+                    operator_bond: 2_000_000,
+                    fee_per_byte_epoch: 10,
+                },
+                crate::domain::storage_params::StorageDomainParams::default(),
+                Some(valid_merkle_proof()),
+                Some([0x42u8; 32]),
+                request_id,
+                String::new(),
+                String::new(),
+            )
+            .await;
+        assert!(
+            unsigned.is_err(),
+            "an unsigned deal open must be refused, not debit arbitrary accounts"
+        );
+
+        // A signature from the wrong key must also be refused.
+        let wrong_key = crate::crypto::primitives::KeyPair::generate().unwrap();
+        let wrong_sig = hex::encode(wrong_key.sign(&deal_msg));
+        let wrong_payer = server
+            .storage_open_deal(
+                1,
+                manifest.clone(),
+                format!("0x{}", hex::encode(s_id.0)),
+                format!("0x{}", op.to_hex()),
+                format!("0x{}", payer.to_hex()),
+                0,
+                10,
+                100,
+                crate::domain::storage_deal::StorageEconomicsParams {
+                    operator_bond: 2_000_000,
+                    fee_per_byte_epoch: 10,
+                },
+                crate::domain::storage_params::StorageDomainParams::default(),
+                Some(valid_merkle_proof()),
+                Some([0x42u8; 32]),
+                request_id,
+                wrong_sig,
+                hex::encode(op_sig.clone()),
+            )
+            .await;
+        assert!(
+            wrong_payer.is_err(),
+            "a payer signature from the wrong key must be refused"
+        );
+
+        // Strix HIGH (CWE-347) regression: the signed preimage binds the
+        // manifest-derived shard size and the manifest id, so a valid
+        // signature cannot be replayed against a forged manifest that
+        // declares a larger shard for the same shard_id. The chain prices
+        // the escrow from that size, so without this binding the forgery
+        // would debit more than either signer authorized.
+        let mut forged = manifest.clone();
+        forged.shards[0].size = 999_999;
+        let forged_res = server
+            .storage_open_deal(
+                1,
+                forged,
+                format!("0x{}", hex::encode(s_id.0)),
+                format!("0x{}", op.to_hex()),
+                format!("0x{}", payer.to_hex()),
+                0,
+                10,
+                100,
+                crate::domain::storage_deal::StorageEconomicsParams {
+                    operator_bond: 2_000_000,
+                    fee_per_byte_epoch: 10,
+                },
+                crate::domain::storage_params::StorageDomainParams::default(),
+                Some(valid_merkle_proof()),
+                Some([0x42u8; 32]),
+                request_id,
+                hex::encode(payer_sig.clone()),
+                hex::encode(op_sig.clone()),
+            )
+            .await;
+        assert!(
+            forged_res.is_err(),
+            "a signature must not survive a manifest that changes the escrow size"
+        );
+
+        // Strix MEDIUM (CWE-294) regression: the same signed deal-open must
+        // not be replayable. The first call above opened an ACTIVE deal over
+        // (manifest, shard, operator, replica 0, epochs 10..100); resending
+        // the same signed request must be refused by the chain's duplicate
+        // active-deal guard before any escrow or bond moves again.
+        let replay = server
+            .storage_open_deal(
+                1,
+                manifest.clone(),
+                format!("0x{}", hex::encode(s_id.0)),
+                format!("0x{}", op.to_hex()),
+                format!("0x{}", payer.to_hex()),
+                0,
+                10,
+                100,
+                crate::domain::storage_deal::StorageEconomicsParams {
+                    operator_bond: 2_000_000,
+                    fee_per_byte_epoch: 10,
+                },
+                crate::domain::storage_params::StorageDomainParams::default(),
+                Some(valid_merkle_proof()),
+                Some([0x42u8; 32]),
+                request_id,
+                hex::encode(payer_sig.clone()),
+                hex::encode(op_sig.clone()),
+            )
+            .await;
+        assert!(
+            replay.is_err(),
+            "the same signed deal-open must not be replayable for a second escrow debit"
+        );
     }
 
     #[tokio::test]

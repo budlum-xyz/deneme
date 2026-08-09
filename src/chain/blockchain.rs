@@ -2330,12 +2330,14 @@ impl Blockchain {
     ///   Report is rejected WITHOUT a state change.
     /// * If the report is ACTIONABLE (i.e. `slash_from_report` actually
     ///   Slashes the offender) the fee is refunded.
-    /// * A report arriving `Unverified` is checked cryptographically first,
-    ///   by [`crate::registry::evidence::SlashingReport::verify_double_sign`].
-    ///   If the pair of signatures holds it is promoted to
-    ///   `ConsensusVerified` and proceeds; if it does not, the report is
-    ///   refused before the fee is charged, so an unprovable report costs
-    ///   nothing and an honest one is not punished for arriving over RPC.
+    /// * A report arriving `Unverified` is refused before the fee is charged
+    ///   (Strix CWE-347): this node cannot prove that two signatures in a
+    ///   double-sign proof belong to two blocks at the same height, because
+    ///   it does not hold the rival block. Reports reach the registry as
+    ///   `ConsensusVerified` only through the consensus path, where the
+    ///   aggregator verifies equivocation against the validator snapshot at
+    ///   ingest. So an unprovable report costs nothing and an honest one is
+    ///   not punished for arriving over RPC.
     /// * If the report is REJECTED after the fee was taken the fee is
     ///   Burned - the report carries no economic protection, and the
     ///   Submitter is the only one with skin in the game.
@@ -2344,35 +2346,37 @@ impl Blockchain {
     ///   Is refunded (this matches `is_actionable` semantics).
     pub fn submit_registry_slashing_report(
         &mut self,
-        mut report: crate::registry::evidence::SlashingReport,
+        report: crate::registry::evidence::SlashingReport,
     ) -> Result<Option<crate::registry::permissionless::SlashOutcome>, String> {
         // An externally submitted report arrives `Unverified`, because the RPC
-        // layer overwrites whatever provenance the caller claimed. Until this
-        // check existed, that was the end of the story: `is_actionable`
-        // refused every `Unverified` report, the refusal took the `Err` path
-        // below, and the `Err` path burns the fee. So the permissionless
-        // endpoint charged for every report and could not act on any of them,
-        // including correct ones. An honest reporter with real proof of an
-        // equivocation paid the fee and watched nothing happen.
+        // layer overwrites whatever provenance the caller claimed, and it is
+        // refused here, before the fee is charged.
         //
-        // A double-sign proof does not need a trusted submitter. It carries
-        // two signatures by the offender over two different block hashes at
-        // one height, and only the offender's key can produce that pair. So
-        // the node checks the pair itself and promotes the report on the
-        // strength of the cryptography rather than the sender.
+        // The refusal is not the old fee-burning hole. The previous shape
+        // promoted a `DoubleSign` report after checking only that the two
+        // signatures verify under the offender's key. That check is not an
+        // equivocation proof: a validator signs one block per height, so two
+        // signatures over two different hashes are ordinary production unless
+        // both hashes belong to blocks at the same height, and this node does
+        // not hold the rival block a report would need to show that. An
+        // attacker could take two legitimate signed blocks from different
+        // heights, copy their hashes and signatures into a forged report, and
+        // slash an innocent validator. Promotion is therefore disabled: a
+        // report reaches the registry as `ConsensusVerified` only through the
+        // consensus path, where the aggregator verifies both signatures
+        // against the validator snapshot at ingest and records the
+        // equivocation itself.
         //
-        // This runs before the fee is charged, so a report that fails
-        // verification is refused without taking anything, and a report that
-        // passes reaches the registry as `ConsensusVerified`.
+        // A full fix (checking the rival block's own body against the proof's
+        // height) is a wire-format change and is tracked separately; this
+        // refusal closes the slash-any-validator path without one.
         if report.provenance == crate::registry::ProofProvenance::Unverified {
-            report.verify_double_sign().map_err(|e| {
-                format!(
-                    "unverified report was not provable from its own contents: {e}. \
-                     Only a double-sign proof can be checked this way; other conditions \
-                     reach the registry through consensus, not this endpoint."
-                )
-            })?;
-            report.provenance = crate::registry::ProofProvenance::ConsensusVerified;
+            return Err("unverified slashing reports are refused: this node cannot \
+                 verify that the two hashes in a double-sign proof belong to \
+                 two blocks at the same height, because it does not hold the \
+                 rival block. Reports reach the registry through consensus, \
+                 not this endpoint."
+                .to_string());
         }
 
         let fee = self.state.registry.params().slashing_report_fee;
@@ -4830,6 +4834,31 @@ impl Blockchain {
                 })?
                 .size,
         );
+
+        // Replay guard: a signed deal-open (Strix CWE-294) must not be able
+        // to debit escrow and lock bond twice for the same placement. If an
+        // ACTIVE deal already covers this (manifest, shard, operator,
+        // replica, epoch range), refuse before any balance moves. The
+        // caller-chosen request_id is bound in the RPC-layer signature; this
+        // second check makes the same authorization non-replayable on the
+        // chain even if the RPC layer were bypassed.
+        let duplicate = self
+            .state
+            .storage_registry
+            .deals_for_shard(&manifest.manifest_id, &shard_id)
+            .iter()
+            .any(|d| {
+                d.status == crate::domain::storage_deal::DealStatus::Active
+                    && d.operator == operator
+                    && d.replica_index == replica_index
+                    && d.deal_start_epoch == start_epoch
+                    && d.deal_end_epoch == end_epoch
+            });
+        if duplicate {
+            return Err(format!(
+                "an active deal already covers shard {shard_id:?} for operator {operator} at replica {replica_index} over epochs {start_epoch}..{end_epoch}; refusing a replayed open"
+            ));
+        }
         let total_fee = economics.total_fee(shard_bytes, epochs);
 
         // 2. Debit Payer (Client Escrow)
@@ -4974,10 +5003,14 @@ impl Blockchain {
                 continue;
             }
 
-            let epochs = reward_until.saturating_sub(last_epoch);
-            // Same per-byte rate the payer escrowed at open time, applied to
-            // the epochs that have elapsed since the last accrual.
-            let amount = deal.total_fee(epochs);
+            // Delta of two cumulative totals: `total_fee` rounds up
+            // (div_ceil), so a fresh interval total each tick would mint
+            // more than the escrowed fee (Strix HIGH, BUDLUM #162).
+            let paid_through = last_epoch.saturating_sub(start_epoch);
+            let owed_through = reward_until.saturating_sub(start_epoch);
+            let amount = deal
+                .total_fee(owed_through)
+                .saturating_sub(deal.total_fee(paid_through));
             if amount == 0 {
                 continue;
             }
@@ -6894,5 +6927,56 @@ mod bond_and_reorg_tests {
 
         let error = left.try_reorg(candidate).unwrap_err();
         assert!(error.contains("state root mismatch"));
+    }
+
+    /// Regression for the Strix HIGH finding: an externally submitted
+    /// `Unverified` report used to be promoted to `ConsensusVerified` after
+    /// checking only that two signatures verify under the offender's key.
+    /// That is not an equivocation proof: a validator signs one block per
+    /// height, so two signatures over two different hashes are ordinary
+    /// production unless both hashes belong to blocks at the same height, and
+    /// this node does not hold the rival block. Anyone could slash an
+    /// innocent validator with two signed blocks from different heights.
+    /// Promotion is disabled; the report is refused before the fee is
+    /// charged, so the fee-burning hole does not return either.
+    #[test]
+    fn unverified_double_sign_report_is_refused_before_the_fee_is_charged() {
+        let mut bc = Blockchain::new(
+            Arc::new(crate::consensus::PoWEngine::new(0)),
+            None,
+            45262,
+            None,
+        );
+        let offender = Address::from([0x11; 32]);
+        let reporter = Address::from([0x22; 32]);
+        {
+            let account = bc.state.get_or_create(&reporter);
+            account.balance = 1_000;
+        }
+        let report = crate::registry::evidence::SlashingReport::new(
+            offender,
+            crate::registry::roles::VALIDATOR,
+            crate::registry::evidence::SlashingProof::DoubleSign {
+                height: 7,
+                block_hash_1: "aa".into(),
+                block_hash_2: "bb".into(),
+                signature_1: vec![1; 64],
+                signature_2: vec![2; 64],
+            },
+            crate::registry::evidence::ProofProvenance::Unverified,
+            Some(reporter),
+        );
+        let result = bc.submit_registry_slashing_report(report);
+        assert!(result.is_err(), "unverified reports must be refused");
+        let err = result.unwrap_err().to_lowercase();
+        assert!(
+            err.contains("unverified"),
+            "the refusal must name the provenance: {err}"
+        );
+        assert_eq!(
+            bc.state.get_balance(&reporter),
+            1_000,
+            "the fee must not be charged for a refused report"
+        );
     }
 }

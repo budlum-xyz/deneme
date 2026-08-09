@@ -75,7 +75,7 @@ services:
     container_name: budlum-node2
     ports:
       - "4002:4002"
-      - "18545:8545"
+      - "127.0.0.1:18545:8545"
     volumes:
       - node2_data:/home/budlum/data
       - node2_secrets:/home/budlum/secrets

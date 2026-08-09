@@ -18,9 +18,9 @@ echo "[docker-smoke] Starting container: $CONTAINER_NAME (Q12 devnet_fallback pe
 # Q12 devnet_fallback: mainnet container may fail without HSM/PKCS#11.
 # Try mainnet first; if timeout, fallback to devnet for smoke purposes.
 # Explicit --network mainnet (Dockerfile default is now devnet for safety).
-if ! docker run -d --name "$CONTAINER_NAME" -p "$RPC_PORT:$RPC_PORT" "$IMAGE_NAME" --network mainnet --port "$RPC_PORT"; then
+if ! docker run -d --name "$CONTAINER_NAME" -p "127.0.0.1:$RPC_PORT:$RPC_PORT" "$IMAGE_NAME" --network mainnet --port "$RPC_PORT"; then
   echo "[docker-smoke] Failed to start mainnet container, trying devnet fallback"
-  docker run -d --name "$CONTAINER_NAME" -p "$RPC_PORT:$RPC_PORT" \
+  docker run -d --name "$CONTAINER_NAME" -p "127.0.0.1:$RPC_PORT:$RPC_PORT" \
     -e BUDLUM_RPC_AUTH_REQUIRED=0 \
     -e BUDLUM_RPC_ALLOWED_IPS= \
     "$IMAGE_NAME" --network devnet --port "$RPC_PORT"
@@ -47,11 +47,11 @@ done
 if [[ "$MAINNET_OK" -eq 0 ]]; then
   echo "[docker-smoke] Mainnet RPC timeout (likely HSM/PKCS#11 missing, expected), trying devnet fallback per Q12"
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  docker run -d --name "$CONTAINER_NAME" -p "$RPC_PORT:$RPC_PORT" \
+  docker run -d --name "$CONTAINER_NAME" -p "127.0.0.1:$RPC_PORT:$RPC_PORT" \
     -e BUDLUM_RPC_AUTH_REQUIRED=0 \
     -e BUDLUM_RPC_ALLOWED_IPS= \
     "$IMAGE_NAME" --network devnet --port 0 --rpc-public-listener "0.0.0.0:$RPC_PORT" 2>/dev/null || \
-  docker run -d --name "$CONTAINER_NAME" -p "$RPC_PORT:$RPC_PORT" \
+  docker run -d --name "$CONTAINER_NAME" -p "127.0.0.1:$RPC_PORT:$RPC_PORT" \
     -e BUDLUM_RPC_AUTH_REQUIRED=0 \
     -e BUDLUM_RPC_ALLOWED_IPS= \
     "$IMAGE_NAME" --network devnet --rpc-public-listener "0.0.0.0:$RPC_PORT"

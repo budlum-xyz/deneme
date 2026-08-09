@@ -42,10 +42,10 @@
 //!
 //! Azure's LRC and HDFS-Xorbas run this shape in production.
 //!
-//! WIRING: unwired - measured: no production path builds an `LrcLayout` yet.
-//! Placement, the coding audit and the repair trigger all have to read from
-//! the same group description, and wiring this before them would connect one
-//! end of a chain whose other end is open.
+//! `msr.rs` now reads this module's repair-traffic function for its LRC
+//! comparison, so the module is wired. Placement, the coding audit and the
+//! repair trigger still have to read from the same group description, but
+//! that is a separate wiring task.
 
 use crate::core::hash::hash_fields_bytes;
 
