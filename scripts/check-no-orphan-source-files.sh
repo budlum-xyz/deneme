@@ -79,10 +79,134 @@ def exempt(rel):
     return False
 
 MOD_DECL = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z0-9_]+)\s*;', re.M)
+# `mod NAME {` opens an inline module scope; declarations inside it resolve
+# against the active lexical module path (Strix MEDIUM, CWE-706, PR #145
+# follow-up).
+MOD_INLINE = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z0-9_]+)\s*\{')
 # `#[path = "..."] mod x;` points a module at an arbitrary file.
 PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]')
 
-declared = set()
+
+def blank(text):
+    return "".join("\n" if c == "\n" else " " for c in text)
+
+
+def strip_rust_raw_strings(text):
+    # Delimiter-aware raw-string stripping; identical to the security-
+    # parameters gate so both gates agree on what is inert text.
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text.startswith("br", i) or text.startswith("rb", i):
+            j = i + 2
+        elif text.startswith("r", i):
+            j = i + 1
+        else:
+            out.append(text[i])
+            i += 1
+            continue
+
+        hash_start = j
+        while j < n and text[j] == "#":
+            j += 1
+        if j >= n or text[j] != '"':
+            out.append(text[i])
+            i += 1
+            continue
+
+        hashes = text[hash_start:j]
+        closing = '"' + hashes
+        end = text.find(closing, j + 1)
+        if end == -1:
+            out.append(text[i])
+            i += 1
+            continue
+
+        out.append(blank(text[i : end + len(closing)]))
+        i = end + len(closing)
+
+    return "".join(out)
+
+
+def strip_rust_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`), so a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail of the
+    # outer comment looking like executable code (Strix MEDIUM, CWE-180,
+    # PR #145 follow-up). Walk the text with a depth counter instead.
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth:
+            out.append("\n" if text[i] == "\n" else " ")
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def sanitize(text):
+    # Blank out comments and literals (preserving line structure) so braces
+    # and `mod` keywords inside them cannot perturb module scope tracking
+    # (Strix MEDIUM, CWE-706, PR #145 follow-up).
+    text = re.sub(r"//[^\n]*", "", text)
+    text = strip_rust_block_comments(text)
+    text = strip_rust_raw_strings(text)
+    text = re.sub(r'b?"(?:\\.|[^"\\])*"', lambda m: blank(m.group(0)), text, flags=re.DOTALL)
+    text = re.sub(r"b?'(?:\\.|[^'\\])'", lambda m: blank(m.group(0)), text, flags=re.DOTALL)
+    return text
+
+
+def iter_nested_mod_decls(text):
+    """Yield (scope, name) for every `mod X;` declaration, tracking inline
+    `mod Y { ... }` scopes lexically so a declaration resolves against the
+    active module path. `mod outer { mod inner; }` yields inner with scope
+    ('outer',), which names src/outer/inner.rs, not src/inner.rs (Strix
+    MEDIUM, CWE-706, PR #145 follow-up)."""
+    scope = []
+    for line in sanitize(text).split("\n"):
+        rest = line.strip()
+        # A leading `}` closes the innermost open block scope.
+        while rest.startswith("}"):
+            if scope:
+                scope.pop()
+            rest = rest[1:].strip()
+        im = MOD_INLINE.match(line)
+        opens = rest.count("{")
+        if im:
+            scope.append(im.group(1))
+            # The inline `mod X {` brace is the module scope itself.
+            opens -= 1
+        dm = MOD_DECL.match(line)
+        if dm:
+            yield tuple(scope), dm.group(1)
+        # Balance braces that open later on the same line: non-module
+        # blocks push a guard so their closing brace pops a guard, not a
+        # module name.
+        closes = rest.count("}")
+        net = opens - closes
+        if net > 0:
+            for _ in range(net):
+                scope.append(None)
+        elif net < 0:
+            for _ in range(-net):
+                if scope:
+                    scope.pop()
+
+declared_paths = set()
 path_targets = set()
 files = []
 
@@ -99,9 +223,41 @@ for sub in scan_roots:
             rel = os.path.relpath(full, root)
             files.append((full, rel))
             text = open(full, encoding='utf-8', errors='replace').read()
-            declared.update(MOD_DECL.findall(text))
+            # Resolve `mod X;` to the concrete files it can name: X.rs and
+            # X/mod.rs in the declaring module's effective directory.
+            # Matching by path rather than by bare module name stops a
+            # same-stemmed file in another directory from satisfying the
+            # declaration (Strix MEDIUM, CWE-706, deneme round 2 PR #213).
+            for scope, mod_name in iter_nested_mod_decls(text):
+                # A `mod child;` declaration resolves relative to the
+                # active lexical module path. `mod outer { mod inner; }`
+                # inside src/lib.rs names src/outer/inner.rs, not
+                # src/inner.rs (Strix MEDIUM, CWE-706, PR #145 follow-up).
+                # `mod.rs`, `lib.rs` and `main.rs` are all crate roots:
+                # children resolve next to them (`src/ast.rs`), while a child
+                # of a non-root parent (`src/foo.rs`) resolves into a
+                # directory named after the parent (`src/foo/child.rs`).
+                if os.path.basename(full) in ('mod.rs', 'lib.rs', 'main.rs'):
+                    module_dir = os.path.join(os.path.dirname(full), *scope)
+                else:
+                    module_dir = os.path.join(
+                        os.path.dirname(full),
+                        os.path.splitext(os.path.basename(full))[0],
+                        *scope,
+                    )
+                for candidate in (
+                    os.path.join(module_dir, mod_name + '.rs'),
+                    os.path.join(module_dir, mod_name, 'mod.rs'),
+                ):
+                    declared_paths.add(os.path.normpath(candidate))
             for target in PATH_ATTR.findall(text):
-                path_targets.add(os.path.basename(target).removesuffix('.rs'))
+                # `#[path = "..."]` is relative to the directory containing
+                # the declaring file. Track the resolved concrete path, not
+                # the basename stem: a same-stemmed file in another directory
+                # must not count as declared (Strix MEDIUM, CWE-706, PR #145
+                # follow-up).
+                target_path = os.path.normpath(os.path.join(os.path.dirname(full), target))
+                path_targets.add(target_path)
 
 if not files:
     print("FAIL: no .rs files found - wrong root, the gate would be vacuous", file=sys.stderr)
@@ -111,8 +267,10 @@ orphans = []
 for full, rel in files:
     if exempt(rel):
         continue
+    abs_path = os.path.normpath(full)
     stem = os.path.basename(rel)[:-3]
-    if stem not in declared and stem not in path_targets:
+    declared_here = abs_path in declared_paths or abs_path in path_targets
+    if not declared_here:
         lines = sum(1 for _ in open(full, encoding='utf-8', errors='replace'))
         orphans.append(f"{rel}  ({lines} lines)")
 
@@ -193,7 +351,50 @@ self_test() {
     exit 1
   fi
 
-  echo "orphan-file gate self-test OK: an undeclared file and a missing src are rejected; declared modules, nested modules, #[path] aliases and src/bin targets all pass."
+  # 7. Inline nested modules resolve against the lexical module path:
+  #    `mod outer { mod inner; }` names src/outer/inner.rs, so a bare
+  #    src/inner.rs must stay an orphan (Strix MEDIUM, CWE-706, PR #145
+  #    follow-up).
+  rm -rf "$tmp/inline"; mkdir -p "$tmp/inline/src"
+  printf 'mod outer {\n    mod inner;\n}\n' > "$tmp/inline/src/lib.rs"
+  printf 'pub fn ghost() {}\n' > "$tmp/inline/src/inner.rs"
+  if ( scan "$tmp/inline" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: an inline-nested module declaration satisfied a file outside the lexical scope!" >&2
+    exit 1
+  fi
+
+  # 8. The same inline nesting with the file in the real location must
+  #    pass: src/outer/inner.rs is what `mod inner;` inside `mod outer`
+  #    actually names.
+  rm -rf "$tmp/inlinegood"; mkdir -p "$tmp/inlinegood/src/outer"
+  printf 'mod outer {\n    mod inner;\n}\n' > "$tmp/inlinegood/src/lib.rs"
+  printf 'pub fn a() {}\n' > "$tmp/inlinegood/src/outer/inner.rs"
+  if ! ( scan "$tmp/inlinegood" ) >/dev/null 2>&1; then
+    echo "BROKEN GATE: an inline-nested module at its real path was flagged!" >&2
+    exit 1
+  fi
+
+  # 9. Nested Rust block comments must not perturb module scope tracking:
+  #    a `}` inside `/* ... /* ... */ ... */` is comment text, not a scope
+  #    close (Strix MEDIUM, CWE-180, PR #145 follow-up).
+  rm -rf "$tmp/nestedc"; mkdir -p "$tmp/nestedc/src"
+  printf 'mod outer {\n    /* x /* y */ } */\n    mod inner;\n}\n' > "$tmp/nestedc/src/lib.rs"
+  printf 'pub fn ghost() {}\n' > "$tmp/nestedc/src/inner.rs"
+  if ( scan "$tmp/nestedc" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a nested block comment perturbed module scope tracking!" >&2
+    exit 1
+  fi
+
+  # 10. The same nesting with the file at the real path passes.
+  rm -rf "$tmp/nestedcgood"; mkdir -p "$tmp/nestedcgood/src/outer"
+  printf 'mod outer {\n    /* x /* y */ } */\n    mod inner;\n}\n' > "$tmp/nestedcgood/src/lib.rs"
+  printf 'pub fn a() {}\n' > "$tmp/nestedcgood/src/outer/inner.rs"
+  if ! ( scan "$tmp/nestedcgood" ) >/dev/null 2>&1; then
+    echo "BROKEN GATE: a nested comment next to a real module declaration was flagged!" >&2
+    exit 1
+  fi
+
+  echo "orphan-file gate self-test OK: an undeclared file, a missing src, an inline-nested declaration pointing outside its lexical scope and a nested block comment perturbing scope are rejected; declared modules, nested modules, #[path] aliases, src/bin targets, inline-nested modules and nested comments next to real declarations all pass."
 }
 
 if [ "${1:-}" = "--self-test" ]; then

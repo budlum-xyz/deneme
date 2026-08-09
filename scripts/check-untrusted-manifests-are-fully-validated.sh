@@ -71,8 +71,48 @@ for path in (manifest, deal, actor):
         sys.exit(2)
 
 
+def blank(text):
+    return "".join("\n" if c == "\n" else " " for c in text)
+
+
+def strip_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`); a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail looking
+    # like executable code (Strix MEDIUM, CWE-180, PR #145 follow-up).
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth:
+            out.append("\n" if text[i] == "\n" else " ")
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def strip_comments(src):
-    return re.sub(r"//[^\n]*", "", src)
+    # Strip line comments, nested block comments and string/char literals
+    # (preserving line structure) so `manifest.validate_untrusted(` written
+    # inside a comment or string cannot satisfy the call-site checks (Strix
+    # MEDIUM, CWE-180, PR #145 follow-up).
+    src = re.sub(r"//[^\n]*", "", src)
+    src = strip_block_comments(src)
+    src = re.sub(r'b?"(?:\\.|[^"\\])*"', lambda m: blank(m.group(0)), src, flags=re.DOTALL)
+    src = re.sub(r"b?'(?:\\.|[^'\\])'", lambda m: blank(m.group(0)), src, flags=re.DOTALL)
+    return src
 
 
 def body_of(src, header):
@@ -149,8 +189,12 @@ for name, src, header in doors:
             "watched."
         )
         continue
-    if "validate_untrusted" not in region:
-        weak = "verify_id" in region
+    # A bare substring match would let a string literal or unrelated token
+    # containing `validate_untrusted` satisfy the gate while the real call is
+    # replaced by `verify_id` (Strix MEDIUM, CWE-697, deneme round 2 PR #228).
+    # Require the actual method call on a manifest receiver.
+    if not re.search(r"\bmanifest\s*\.\s*validate_untrusted\s*\(", region):
+        weak = re.search(r"\bmanifest\s*\.\s*verify_id\s*\(", region) is not None
         detail = (
             " It calls `verify_id`, which only proves the id was derived from "
             "the fields present, not that they agree with each other."
@@ -294,7 +338,44 @@ PYB
     return 1
   fi
 
-  echo "untrusted manifest gate self-test OK: 6 canaries"
+  # 7. A door whose only `validate_untrusted` evidence lives inside a string
+  #    or a nested block comment still settles for verify_id: inert text is
+  #    not a call (Strix MEDIUM, CWE-180, PR #145 follow-up).
+  rm -rf "$tmp/lit"; mkdir -p "$tmp/lit/src/storage" "$tmp/lit/src/domain" "$tmp/lit/src/chain"
+  python3 - "$tmp/lit" <<'PYL'
+import os
+import sys
+
+root = sys.argv[1]
+open(os.path.join(root, "src/storage/manifest.rs"), "w").write(
+    "    pub fn validate_untrusted(&self) -> Result<(), String> {\n"
+    "        if self.erasure.n != self.shard_count { return Err(\"n\".into()); }\n"
+    "        let data = self.shards.iter().filter(|s| s.kind == ShardKind::Data).count() as u32;\n"
+    "        if data != self.erasure.k { return Err(\"k\".into()); }\n"
+    "        self.verify_id()\n"
+    "    }\n"
+)
+open(os.path.join(root, "src/domain/storage_deal.rs"), "w").write(
+    "    pub fn open_deal(&mut self) -> Result<(), String> {\n"
+    "        let _s = \"manifest.validate_untrusted()\";\n"
+    "        /* outer /* inner */ manifest.validate_untrusted() */\n"
+    "        manifest.verify_id()?;\n"
+    "        Ok(())\n"
+    "    }\n"
+    "    #[test]\n    fn a_deal_open_refuses_a_manifest_claiming_parity_it_does_not_have() {}\n"
+    "    #[test]\n    fn a_deal_open_still_accepts_a_coherent_manifest() {}\n"
+)
+open(os.path.join(root, "src/chain/chain_actor.rs"), "w").write(
+    "pub async fn register_storage_manifest(&self) {\n"
+    "    self.tx.send(ChainCommand::RegisterStorageManifest {\n"
+    "        manifest,\n        response: tx,\n    }).await;\n}\n"
+    "ChainCommand::RegisterStorageManifest { manifest, response } => {\n"
+    "    if let Err(e) = manifest.validate_untrusted() { return; }\n}\n"
+)
+PYL
+  expect_finding "$tmp/lit" "a door whose only validate_untrusted evidence is inside a string or comment" || return 1
+
+  echo "untrusted manifest gate self-test OK: 7 canaries"
 }
 
 if [[ "${1:-}" == "--self-test" ]]; then

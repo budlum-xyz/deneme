@@ -46,6 +46,7 @@ ROOT="${BUDLUM_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 # Each entry is a test that tampers with an honest trace and requires the
 # verifier to refuse the result.
+required_tests_scope="budzero/bud-proof/src"
 required_tests=(
   rejects_a_forged_difference
   rejects_a_forged_product
@@ -127,6 +128,18 @@ for name in required:
 REFUSAL = re.compile(r"is_err\(\)|unwrap_err\(\)|expect_err\(|should_panic")
 
 
+def strip_strings(text):
+    # Remove string and char literals so a token such as `"is_err()"` inside
+    # a literal cannot satisfy the refusal check while the test asserts
+    # success (Strix MEDIUM, deneme round 2 PR #228). re.S matters: a Rust
+    # string continued with a trailing backslash spans lines, and without
+    # DOTALL the escaped-newline branch of the pattern fails and the match
+    # swallows real code after the literal.
+    text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text, flags=re.S)
+    text = re.sub(r"'(?:\\.|[^'\\])*'", "''", text, flags=re.S)
+    return text
+
+
 def body_of(fn_name):
     """Brace-matched body of `fn fn_name`, or None."""
     m = re.search(r"\bfn\s+" + re.escape(fn_name) + r"\s*(?:<[^>]*>)?\s*\(", blob)
@@ -165,7 +178,7 @@ def asserts_refusal(fn_name, depth=0, seen=None):
     body = body_of(fn_name)
     if body is None:
         return False
-    if REFUSAL.search(body):
+    if REFUSAL.search(strip_strings(body)):
         return True
     for callee in set(re.findall(r"\b([a-z_][a-z0-9_]{4,})\s*\(", body)):
         if callee in seen:

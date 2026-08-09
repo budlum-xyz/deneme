@@ -70,8 +70,109 @@ prover_src = open(prover, encoding="utf-8").read()
 verifier_src = open(verifier, encoding="utf-8").read()
 build_src = open(build, encoding="utf-8").read()
 
+def blank(text):
+    return "".join("\n" if c == "\n" else " " for c in text)
+
+
+def strip_rust_raw_strings(text):
+    # Delimiter-aware raw-string stripping. A raw string ends only at the
+    # quote followed by the SAME hash run that opened it: `r##"..."##`.
+    # A regex that accepts any hash count on the close (`"#+`) splits on
+    # the first embedded quote whose tail happens to carry a hash, leaving
+    # the rest of the literal looking like executable code (Strix MEDIUM,
+    # CWE-180, PR #145 follow-up).
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text.startswith("br", i) or text.startswith("rb", i):
+            j = i + 2
+        elif text.startswith("r", i):
+            j = i + 1
+        else:
+            out.append(text[i])
+            i += 1
+            continue
+
+        hash_start = j
+        while j < n and text[j] == "#":
+            j += 1
+        if j >= n or text[j] != '"':
+            out.append(text[i])
+            i += 1
+            continue
+
+        hashes = text[hash_start:j]
+        closing = '"' + hashes
+        end = text.find(closing, j + 1)
+        if end == -1:
+            out.append(text[i])
+            i += 1
+            continue
+
+        out.append(blank(text[i : end + len(closing)]))
+        i = end + len(closing)
+
+    return "".join(out)
+
+
+def strip_rust_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`), so a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail of the
+    # outer comment looking like executable code (Strix MEDIUM, CWE-180,
+    # PR #145 follow-up). Walk the text with a depth counter instead.
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth:
+            out.append("\n" if text[i] == "\n" else " ")
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def strip_comments(s):
-    return re.sub(r"//[^\n]*", "", s)
+    # Rust-aware sanitization: a string or character literal is inert
+    # (never executed as code), so it must not be able to satisfy a
+    # regex evidence check. A comment-only strip would let a contributor
+    # hide `observe_slice(&config.security_parameters())` or
+    # `new_with_security(0, security, ...)` inside a string literal and
+    # keep the vulnerable implementation while the gate reports success
+    # (Strix MEDIUM, CWE-180, PR #145 follow-up). Replace literals with
+    # same-length spaces so line structure and ordering checks still
+    # behave correctly; keep newlines inside block comments so line
+    # numbers do not shift.
+    s = re.sub(r"//[^\n]*", "", s)
+    s = strip_rust_block_comments(s)
+    # Raw strings first: `r"..."`, `r#"..."#`, `br#"..."#`. Inside a raw
+    # string a quote is not special and only the closing quote plus the
+    # same hash run ends it, so the ordinary string regex below would
+    # split on an embedded quote and leave the tail looking like
+    # executable code. The delimiter-aware scanner keeps the hash count
+    # matched on both ends.
+    s = strip_rust_raw_strings(s)
+    # re.DOTALL matters here: a `\` line-continuation inside a string is
+    # `\\.` with the dot spanning the newline. Without DOTALL the regex
+    # cannot find the closing quote, swallows real code past the literal
+    # and falsely blanks out executable statements (prover.rs multi-line
+    # panic! strings hit this). PR #145 follow-up.
+    s = re.sub(r'b?"(?:\\.|[^"\\])*"', lambda m: blank(m.group(0)), s, flags=re.DOTALL)
+    s = re.sub(r"b?'(?:\\.|[^'\\])'", lambda m: blank(m.group(0)), s, flags=re.DOTALL)
+    return s
 
 problems = []
 checked = 0
@@ -104,6 +205,88 @@ for src, name in ((prover_src, "prover"), (verifier_src, "verifier")):
             f"challenge. A parameter set the prover controls and the transcript "
             f"does not cover can be chosen after the challenge is drawn."
         )
+    else:
+        # A bare read is not absorption: `let _unused = security_parameters();`
+        # leaves the parameters outside the transcript (Strix MEDIUM, deneme
+        # round 2 PR #222). The value read must reach the challenger through
+        # an observe call before the first challenge.
+        # Find the line that calls security_parameters() and check that the
+        # value it returns is what reaches the challenger. A bare `observe`
+        # somewhere later is not enough: `let _unused = security_parameters();
+        # challenger.observe(123u64);` would satisfy a presence check while
+        # the FRI parameters stay outside the transcript (Strix MEDIUM,
+        # CWE-345, PR #145 follow-up). The observe must carry either the
+        # direct call or the binding the read was stored into.
+        sec_line = next(i for i, l in enumerate(lines[:stop]) if "security_parameters()" in l)
+        sec_stmt = lines[sec_line]
+        after_sec = "\n".join(lines[sec_line:stop])
+        bind_match = re.search(
+            r"\blet\s+(?:mut\s+)?([A-Za-z_]\w*)\b\s*=.*security_parameters\s*\(",
+            sec_stmt,
+        )
+        direct_observed = (
+            re.search(
+                r"observe(?:_slice)?\s*\(\s*&?\s*(?:config\.)?security_parameters\s*\([^\n;]*\)\s*\)",
+                after_sec,
+            )
+            is not None
+        )
+        bound_observed = False
+        shadowed_before_observe = False
+        if bind_match:
+            binding = bind_match.group(1)
+            # The binding must still refer to the derived value when it is
+            # observed: a `let x = security_parameters(); let x = attacker;`
+            # shadow lets an attacker-chosen value reach the challenger while
+            # the identifier name matches (Strix MEDIUM, CWE-345, PR #145
+            # follow-up).
+            rest = after_sec[len(sec_stmt):]
+            # Any rebinding before the observe is a shadow: a second `let`,
+            # or a plain mutable assignment (`x = attacker;`), overwrites the
+            # derived value while the identifier name still matches (Strix
+            # MEDIUM, CWE-345, PR #145 follow-up).
+            observe_match = re.search(
+                rf"observe(?:_slice)?\s*\(\s*&?\s*{re.escape(binding)}\s*\)",
+                after_sec,
+            )
+            before_observe = (
+                after_sec[: observe_match.start()] if observe_match is not None else rest
+            )
+            shadowed_before_observe = (
+                re.search(
+                    rf"\blet\s+(?:mut\s+)?{re.escape(binding)}\b\s*=",
+                    before_observe,
+                )
+                is not None
+                or re.search(
+                    rf"\b{re.escape(binding)}\b\s*=(?!=)",
+                    before_observe,
+                )
+                is not None
+            )
+            bound_observed = observe_match is not None
+        if (shadowed_before_observe and bound_observed) or not (
+            direct_observed or bound_observed
+        ):
+            if shadowed_before_observe:
+                problems.append(
+                    f"{name}.rs shadows the `security_parameters()` binding "
+                    f"before observing it, so an attacker-chosen value can "
+                    f"reach the transcript while the identifier matches."
+                )
+            else:
+                problems.append(
+                    f"{name}.rs reads `security_parameters()` but never observes the "
+                    f"value (or its binding) into the challenger before the first "
+                    f"challenge. An unrelated observe call leaves the FRI parameters "
+                    f"outside the transcript."
+                )
+            problems.append(
+                f"{name}.rs reads `security_parameters()` but never observes the "
+                f"value (or its binding) into the challenger before the first "
+                f"challenge. An unrelated observe call leaves the FRI parameters "
+                f"outside the transcript."
+            )
 
 # 2. The absorbed vector must be derived from the FriParameters binding.
 m = re.search(
@@ -162,6 +345,33 @@ else:
                 )
         checked += len(fri_fields)
 
+        # The derived `security` vector must be the one passed into the final
+        # config; a discarded `let security = vec![...]` followed by a
+        # different vector in `new_with_security` is a false positive
+        # (Strix MEDIUM, deneme round 2 PR #222). A rebinding of `security`
+        # after the derive is the same evasion with a shadow: reject it too
+        # (Strix MEDIUM, CWE-345, PR #145 follow-up).
+        config_tail = strip_comments(build_src[sm.end():])
+        security_rebound = (
+            re.search(r"\blet\s+(?:mut\s+)?security\b\s*=", config_tail)
+            is not None
+        )
+        # `security` must be a bare argument: preceded by a comma (argument
+        # separator), not by an opening paren. `new_with_security(pcs,
+        # challenger, security)` matches; `mutate(security)` does not (Strix
+        # MEDIUM, CWE-345, PR #145 follow-up).
+        if security_rebound or not re.search(
+            r"new_with_security\s*\([^;]*?,\s*&?\s*security\s*(?:,|\))",
+            config_tail,
+            re.DOTALL,
+        ):
+            problems.append(
+                "the derived `security` vector is never passed into "
+                "`new_with_security` (or is rebound first): the transcript "
+                "absorbs one parameter set while the config is built from "
+                "another."
+            )
+
 if not checked:
     print("FAIL: gate checked nothing", file=sys.stderr)
     sys.exit(2)
@@ -202,7 +412,8 @@ self_test() {
         fri_params.log_blowup as u64,
         fri_params.num_queries as u64,
         fri_params.commit_proof_of_work_bits as u64,
-    ];'
+    ];
+    StarkConfig::new_with_security(0, security, fri_params.mmcs.clone());'
 
   # 1. The corrected shape must pass.
   mk "$tmp/good" "$GOOD_CFG" "$GOOD_PV" "$GOOD_BUILD"
@@ -286,7 +497,102 @@ self_test() {
     exit 1
   fi
 
-  echo "security parameter gate self-test OK: no absorption, late absorption, hand-written literals, a missing FRI field, a removed trait method, one-sided absorption and a missing tree are all rejected; the derived tree passes."
+  # 9. Inert string literals must not satisfy the gate (Strix MEDIUM,
+  #    CWE-180, PR #145 follow-up). The text below contains the exact
+  #    absorption call, but only as a string: no executable code performs
+  #    the absorption.
+  mk "$tmp/strlit" "$GOOD_CFG" '    let _doc = "challenger.observe_slice(&config.security_parameters());";
+    let rand_1: SC::Challenge = challenger.sample_algebra_element();' "$GOOD_BUILD"
+  if ( scan "$tmp/strlit" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a string literal containing the absorption call was accepted as real code!" >&2
+    exit 1
+  fi
+
+  # 10. The same trick against the whole build: the fri literal, the
+  #     derived vector and the config wiring exist only inside a string.
+  mk "$tmp/strlitbuild" "$GOOD_CFG" "$GOOD_PV" '    let _doc = "let fri_params = p3_fri::FriParameters { log_blowup: 3, num_queries: 100, commit_proof_of_work_bits: 16, mmcs: m }; let security = vec![1, 2, 3]; StarkConfig::new_with_security(0, security, m);";'
+  if ( scan "$tmp/strlitbuild" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a string literal containing the config wiring was accepted as real code!" >&2
+    exit 1
+  fi
+
+  # 11. A string literal sitting next to the real call must not disturb
+  #     the gate: the executable absorption is still detected.
+  mk "$tmp/strlitgood" "$GOOD_CFG" '    let _doc = "challenger.observe_slice(&config.security_parameters());";
+    challenger.observe_slice(&config.security_parameters());
+    let rand_1: SC::Challenge = challenger.sample_algebra_element();' "$GOOD_BUILD"
+  if ! ( scan "$tmp/strlitgood" ) >/dev/null 2>&1; then
+    echo "GATE IS WRONG: a real absorption next to a harmless string literal was rejected!" >&2
+    exit 1
+  fi
+
+  # 12. Raw string literals must not satisfy the gate (Strix MEDIUM,
+  #     CWE-180, PR #145 follow-up). A quote embedded inside a raw string
+  #     used to split the ordinary string regex and leave the absorption
+  #     text looking like executable code.
+  mk "$tmp/rawstr" "$GOOD_CFG" '    let _doc = r#"quote: " challenger.observe_slice(&config.security_parameters())"#;
+    let rand_1: SC::Challenge = challenger.sample_algebra_element();' "$GOOD_BUILD"
+  if ( scan "$tmp/rawstr" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a raw string literal containing the absorption call was accepted as real code!" >&2
+    exit 1
+  fi
+
+  # 13. Hash-free raw string: r"..." must be blanked too.
+  mk "$tmp/rawplain" "$GOOD_CFG" '    let _doc = r"challenger.observe_slice(&config.security_parameters())";
+    let rand_1: SC::Challenge = challenger.sample_algebra_element();' "$GOOD_BUILD"
+  if ( scan "$tmp/rawplain" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a hash-free raw string literal was accepted as real code!" >&2
+    exit 1
+  fi
+
+  # 14. Raw byte string carrying the whole build wiring inside.
+  mk "$tmp/rawbuild" "$GOOD_CFG" "$GOOD_PV" '    let _doc = br#"let fri_params = p3_fri::FriParameters { log_blowup: 3, num_queries: 100, commit_proof_of_work_bits: 16, mmcs: m }; let security = vec![1, 2, 3]; StarkConfig::new_with_security(0, security, m);"#;'
+  if ( scan "$tmp/rawbuild" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a raw byte string containing the config wiring was accepted as real code!" >&2
+    exit 1
+  fi
+
+  # 15. A raw string sitting next to the real call must not disturb the
+  #     gate: the executable absorption is still detected.
+  mk "$tmp/rawgood" "$GOOD_CFG" '    let _doc = r#"the real absorption is on the next line"#;
+    challenger.observe_slice(&config.security_parameters());
+    let rand_1: SC::Challenge = challenger.sample_algebra_element();' "$GOOD_BUILD"
+  if ! ( scan "$tmp/rawgood" ) >/dev/null 2>&1; then
+    echo "GATE IS WRONG: a real absorption next to a raw string literal was rejected!" >&2
+    exit 1
+  fi
+
+  # 16. Delimiter mismatch: a raw string whose closing hash run differs
+  #     from the opening one must not be split at the first embedded
+  #     quote-plus-hash (Strix MEDIUM, CWE-180, PR #145 follow-up).
+  mk "$tmp/rawmismatch" "$GOOD_CFG" '    let _doc = r##"prefix "# challenger.observe_slice(&config.security_parameters()) "##;
+    let rand_1: SC::Challenge = challenger.sample_algebra_element();' "$GOOD_BUILD"
+  if ( scan "$tmp/rawmismatch" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a raw string with mismatched hash delimiters was accepted as real code!" >&2
+    exit 1
+  fi
+
+  # 17. Nested Rust block comments must not leave executable-looking tail
+  #     text (Strix MEDIUM, CWE-180, PR #145 follow-up): `/* outer /*
+  #     inner */ observe_slice(...) */` is one comment, all of it inert.
+  mk "$tmp/nestedc" "$GOOD_CFG" '    /* outer /* inner */ challenger.observe_slice(&config.security_parameters()) */
+    let rand_1: SC::Challenge = challenger.sample_algebra_element();' "$GOOD_BUILD"
+  if ( scan "$tmp/nestedc" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a nested block comment containing the absorption call was accepted as real code!" >&2
+    exit 1
+  fi
+
+  # 18. A nested block comment next to the real call must not disturb the
+  #     gate: the executable absorption is still detected.
+  mk "$tmp/nestedgood" "$GOOD_CFG" '    /* outer /* inner */ harmless */
+    challenger.observe_slice(&config.security_parameters());
+    let rand_1: SC::Challenge = challenger.sample_algebra_element();' "$GOOD_BUILD"
+  if ! ( scan "$tmp/nestedgood" ) >/dev/null 2>&1; then
+    echo "GATE IS WRONG: a real absorption next to a nested block comment was rejected!" >&2
+    exit 1
+  fi
+
+  echo "security parameter gate self-test OK: no absorption, late absorption, hand-written literals, a missing FRI field, a removed trait method, one-sided absorption, a missing tree, inert string-literal lookalikes, a string next to the real call, raw string lookalikes, a raw string next to the real call, a mismatched-delimiter raw string, nested block comment lookalikes and a nested comment next to the real call are handled correctly; the derived tree passes."
 }
 
 if [ "${1:-}" = "--self-test" ]; then
