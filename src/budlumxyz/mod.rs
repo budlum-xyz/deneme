@@ -198,7 +198,17 @@ impl BudlumxyzRegistry {
         for (id, app) in &self.apps {
             hasher.update(id.to_le_bytes());
             hasher.update(app.developer.0);
-            hasher.update(app.name.as_bytes());
+            // Length-prefixed so the commitment is injective over the
+            // variable-length strings: without a prefix, distinct
+            // (name, website_url) pairs can collide at the hash boundary
+            // (Strix HIGH, CWE-347, deneme round 2 PR #210).
+            let name_bytes = app.name.as_bytes();
+            hasher.update(
+                u64::try_from(name_bytes.len())
+                    .expect("name fits u64")
+                    .to_le_bytes(),
+            );
+            hasher.update(name_bytes);
             hasher.update([app.developer_attested as u8, app.verified as u8]);
             let category_tag = match app.category.clone() {
                 AppCategory::SocialFi => 0u8,
@@ -209,7 +219,13 @@ impl BudlumxyzRegistry {
                 AppCategory::Other => 5u8,
             };
             hasher.update([category_tag]);
-            hasher.update(app.website_url.as_bytes());
+            let url_bytes = app.website_url.as_bytes();
+            hasher.update(
+                u64::try_from(url_bytes.len())
+                    .expect("url fits u64")
+                    .to_le_bytes(),
+            );
+            hasher.update(url_bytes);
             match app.manifest_id {
                 Some(manifest_id) => {
                     hasher.update([1u8]);

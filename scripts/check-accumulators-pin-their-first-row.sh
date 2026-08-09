@@ -123,6 +123,56 @@ def names_for(column):
 def mentions(statement, column):
     return any(re.search(rf"\b{re.escape(n)}\b", statement) for n in names_for(column))
 
+
+def split_top_level_args(text):
+    args = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(text):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append(text[start:i].strip())
+            start = i + 1
+    tail = text[start:].strip()
+    if tail:
+        args.append(tail)
+    return args
+
+
+def normalize_expr(text):
+    # Strip redundant outer parentheses so a tautology like
+    # `assert_zero(cur_x - (cur_x))` is recognized: `(cur_x)` normalizes to
+    # `cur_x` and the two sides compare equal (Strix MEDIUM, CWE-697,
+    # PR #145 follow-up).
+    text = text.strip()
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    while text and text[0] in pairs and text[-1] == pairs[text[0]]:
+        depth = 0
+        balanced = True
+        for i, ch in enumerate(text):
+            if ch == text[0]:
+                depth += 1
+            elif ch == text[-1]:
+                depth -= 1
+                if depth == 0 and i != len(text) - 1:
+                    balanced = False
+                    break
+        if not balanced or depth != 0:
+            break
+        text = text[1:-1].strip()
+    return text
+
+
+def reference_forms(statement, column):
+    forms = []
+    for n in names_for(column):
+        forms.extend(re.findall(rf"\b{re.escape(n)}\b\s*\[([^\]]+)\]", statement))
+        forms.extend(re.findall(rf"\b{re.escape(n)}\b", statement))
+    return forms
+
 for column, accumulates, risk in ACCUMULATORS:
     if column not in src:
         problems.append(
@@ -136,9 +186,56 @@ for column, accumulates, risk in ACCUMULATORS:
     in_transition = any(
         "when_transition" in st and mentions(st, column) for st in statements
     )
-    in_first_row = any(
-        "when_first_row" in st and mentions(st, column) for st in statements
-    )
+    # A first-row statement that merely *mentions* the column is not a pin:
+    # `when_first_row().assert_zero(cur[COL] - cur[COL])` mentions it twice and
+    # constrains nothing, leaving the accumulator attacker-controlled on row
+    # zero (Strix MEDIUM, deneme round 2 PR #222). The statement must mention
+    # the column in a non-tautological position: the same expression must not
+    # appear on both sides of the top-level argument list.
+    first_row_stmts = [
+        st for st in statements if "when_first_row" in st and mentions(st, column)
+    ]
+    in_first_row = bool(first_row_stmts)
+    if first_row_stmts:
+        tautological = []
+        for st in first_row_stmts:
+            m = re.search(r"\.assert_(?:zero|eq)\(\s*(.*)\s*\)\s*;", st, re.DOTALL)
+            if not m:
+                continue
+            args = split_top_level_args(m.group(1))
+            # Redundant outer parentheses must not hide a tautology:
+            # `assert_zero(cur_x - (cur_x))` normalizes to `cur_x - cur_x`
+            # (Strix MEDIUM, CWE-697, PR #145 follow-up).
+            args = [normalize_expr(a) for a in args]
+            if len(args) >= 2 and args[0] == args[1]:
+                tautological.append(st.strip()[:80])
+            elif len(args) == 1:
+                # `assert_zero(A - A)`: split on top-level minus and compare
+                # the two sides.
+                sides = []
+                depth = 0
+                cur = []
+                for ch in args[0]:
+                    if ch in "([{":
+                        depth += 1
+                    elif ch in ")]}":
+                        depth -= 1
+                    if ch == "-" and depth == 0:
+                        sides.append("".join(cur).strip())
+                        cur = []
+                    else:
+                        cur.append(ch)
+                sides.append("".join(cur).strip())
+                sides = [normalize_expr(s) for s in sides]
+                if len(sides) == 2 and sides[0] == sides[1]:
+                    tautological.append(st.strip()[:80])
+        if tautological:
+            problems.append(
+                f"{column} is 'pinned' only by a tautological first-row constraint "
+                f"(same expression on both sides): {'; '.join(tautological)}. A "
+                f"pin must relate the accumulator to a value the prover cannot "
+                f"choose, not subtract it from itself."
+            )
 
     if not in_transition:
         # Not an accumulator any more, or renamed. Either way the entry is
@@ -298,7 +395,26 @@ pub const COL_GAS_USED: usize = 57;
     exit 1
   fi
 
-  echo "accumulator gate self-test OK: an unpinned event digest, an unpinned image fold, a first-row constraint on another column, a commented-out constraint, a deleted column and a missing AIR are all rejected; the pinned tree passes."
+  # 8. Redundant outer parentheses must not hide a tautology: `A - (A)`
+  #     constrains nothing (Strix MEDIUM, CWE-697, PR #145 follow-up).
+  mk "$tmp/paren" 'pub const COL_EVENT_DIGEST_0: usize = 696;
+pub const COL_MEM_INIT_ACC: usize = 731;
+pub const COL_REG_INIT_ACC: usize = 736;
+pub const COL_GAS_USED: usize = 57;
+        builder.when_transition().assert_zero(nxt[COL_EVENT_DIGEST_0] - cur[COL_EVENT_DIGEST_0]);
+        builder.when_first_row().assert_zero(cur[COL_EVENT_DIGEST_0] - (cur[COL_EVENT_DIGEST_0]));
+        builder.when_transition().assert_eq(nxt[COL_MEM_INIT_ACC], cur[COL_MEM_INIT_ACC]);
+        builder.when_first_row().assert_eq(cur[COL_MEM_INIT_ACC], zero.clone());
+        builder.when_transition().assert_eq(nxt[COL_REG_INIT_ACC], cur[COL_REG_INIT_ACC]);
+        builder.when_first_row().assert_eq(cur[COL_REG_INIT_ACC], zero.clone());
+        builder.when_transition().assert_zero(nxt[COL_GAS_USED] - cur[COL_GAS_USED]);
+        builder.when_first_row().assert_zero(cur[COL_GAS_USED]);'
+  if ( scan "$tmp/paren" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a parenthesized tautology was accepted as a first-row pin!" >&2
+    exit 1
+  fi
+
+  echo "accumulator gate self-test OK: an unpinned event digest, an unpinned image fold, a first-row constraint on another column, a commented-out constraint, a deleted column, a missing AIR and a parenthesized tautology are all rejected; the pinned tree passes."
 }
 
 if [ "${1:-}" = "--self-test" ]; then
