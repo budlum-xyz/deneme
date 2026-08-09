@@ -64,8 +64,48 @@ for path in (manifest, locks):
         sys.exit(2)
 
 
+def blank(text):
+    return "".join("\n" if c == "\n" else " " for c in text)
+
+
+def strip_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`); a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail looking
+    # like executable code (Strix MEDIUM, CWE-180, PR #145 follow-up).
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth:
+            out.append("\n" if text[i] == "\n" else " ")
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def strip_comments(src):
-    return re.sub(r"//[^\n]*", "", src)
+    # Strip line comments and nested block comments (preserving line
+    # structure) so `commitment_tag(` written inside a comment cannot
+    # satisfy the binding checks (Strix MEDIUM, CWE-180, PR #145
+    # follow-up). String literals are deliberately left intact: this gate
+    # reads evidence out of them, e.g. the `BDLM_MANIFEST_V4` domain tag
+    # lives inside a byte-string literal.
+    src = re.sub(r"//[^\n]*", "", src)
+    src = strip_block_comments(src)
+    return src
 
 
 def body_of(src, header):
@@ -190,11 +230,24 @@ else:
             "reading `Plaintext` at the same id."
         )
     checked += 1
-    if "commitment_tag" not in commit:
+    # A bare substring would let a decoy identifier or string containing
+    # `commitment_tag` satisfy the gate while the encryption argument is
+    # unused (Strix MEDIUM, CWE-187, deneme round 2 PR #229). Require the
+    # actual method call on the encryption parameter, and the call must be
+    # consumed by the bytes that feed the final manifest hash: a dead read
+    # (`let _ = encryption.commitment_tag();`) followed by hashing unrelated
+    # bytes proves nothing (Strix MEDIUM, CWE-697, PR #145 follow-up).
+    # The tag must be appended into the committed buffer (or passed into
+    # `hash_fields_bytes`), not merely computed.
+    if not re.search(
+        r"\b(?:push|extend_from_slice|insert|hash_fields_bytes)\s*\([^)]*\bencryption\s*\.\s*commitment_tag\s*\(",
+        commit,
+    ):
         problems.append(
-            "`manifest_id_from_parts` never reads the declaration's "
-            "commitment tag, so the argument is accepted and ignored. That "
-            "is the same as not binding it, with the appearance of binding."
+            "`manifest_id_from_parts` never feeds the declaration's "
+            "commitment tag into the committed bytes, so the argument is "
+            "accepted and ignored (or only dead-read). That is the same as "
+            "not binding it, with the appearance of binding."
         )
     checked += 1
     if "BDLM_MANIFEST_V4" not in commit:
@@ -391,6 +444,23 @@ if commit_mode == "bound":
 }
 """
     site = "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);\n"
+elif commit_mode == "deadread":
+    # Reads the tag into a throwaway binding and hashes only unrelated
+    # bytes: the declaration never influences the committed id (Strix
+    # MEDIUM, CWE-697, PR #145 follow-up).
+    commit = """pub fn manifest_id_from_parts(
+    shards: &[ShardRef],
+    erasure: &ErasureScheme,
+    encryption: &ContentEncryption,
+) -> ContentId {
+    let _proof_of_read = encryption.commitment_tag();
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"BDLM_MANIFEST_V4");
+    buf.extend_from_slice(&erasure.k.to_le_bytes());
+    ContentId(hash_fields_bytes(&[b"BDLM_MANIFEST_V4", &buf]))
+}
+"""
+    site = "        self.manifest_id = manifest_id_from_parts(&self.shards, &self.erasure, &self.encryption);\n"
 elif commit_mode == "ignored":
     # Takes the argument and never reads it. Every signature check passes.
     commit = """pub fn manifest_id_from_parts(
@@ -540,7 +610,13 @@ PYB
   build "$tmp/notest" ok serde bound match absent
   expect_finding "$tmp/notest" "a missing regression test" || return 1
 
-  echo "content encryption declaration gate self-test OK: 14 canaries"
+  # 15. The tag is dead-read but never fed into the committed bytes: the
+  #     declaration stays rewritable under a stable id (Strix MEDIUM,
+  #     CWE-697, PR #145 follow-up).
+  build "$tmp/deadread" ok serde deadread match present
+  expect_finding "$tmp/deadread" "a commitment tag that is dead-read and never bound" || return 1
+
+  echo "content encryption declaration gate self-test OK: 15 canaries"
 }
 
 if [[ "${1:-}" == "--self-test" ]]; then
