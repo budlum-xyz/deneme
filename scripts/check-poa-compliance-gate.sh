@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+required_tests_scope="src/registry"
 required_tests=(
   poa_compliance_rejects_permissionless_screening
   poa_compliance_screening_updates_status
