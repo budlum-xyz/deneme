@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+required_tests_scope="src/core"
 required_tests=(
   governance_rejects_non_whitelisted_parameter_proposal
   governance_rejects_invalid_parameter_value
