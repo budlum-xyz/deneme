@@ -227,8 +227,23 @@ fn run_pipeline(config: ExecutionConfig) -> Result<ExecutionOutput, Box<dyn std:
         "VM execution complete"
     );
 
-    // Apply state updates in memory if committing
+    // Apply state updates in memory if committing.
+    //
+    // A storage-writing contract lowers `storage::field = expr` to
+    // `Opcode::SWrite`, and the VM applies those writes only to its
+    // transient state, never to bud-state. Committing a `final_state_root`
+    // that omits those writes would let a storage-backed contract prove and
+    // commit while the persisted state excludes its transition, breaking
+    // state integrity and enabling replay of one-time logic (Strix HIGH,
+    // deneme round 2 PR #186). Until storage persistence lands in bud-state,
+    // refuse to commit a run whose storage writes are non-empty.
     if config.commit_state {
+        if receipt.state_writes_digest != [0u8; 32] {
+            return Err(
+                "Storage writes are not yet persisted into bud-state; refusing to commit an incorrect final_state_root"
+                    .into(),
+            );
+        }
         state.begin_transaction();
         if let Some(s) = config.sender {
             let mut acc = state
