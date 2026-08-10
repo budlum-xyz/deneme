@@ -221,9 +221,18 @@ fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
                                             // (Strix CWE-697, round 5
                                             // finding: nested return Err
                                             // decoys).
-                                            let closure_decoy = guard_body.contains("= ||")
-                                                || guard_body.contains("= |");
-                                            guarded = !closure_decoy
+                                            // A `return Err` nested inside a
+                                            // closure (`|| { return Err(..); }`),
+                                            // a named closure binding
+                                            // (`let f = || { return Err(..); }`),
+                                            // or a nested block does not fail the
+                                            // outer function closed (Strix
+                                            // CWE-697, round 6 finding).
+                                            let decoy = guard_body.contains("= ||")
+                                                || guard_body.contains("= |")
+                                                || guard_body.contains("fn ")
+                                                || guard_body.contains("{ return Err(");
+                                            guarded = !decoy
                                                 && (guard_body.starts_with("return Err(")
                                                     || guard_body.starts_with("return Err (")
                                                     || guard_body
