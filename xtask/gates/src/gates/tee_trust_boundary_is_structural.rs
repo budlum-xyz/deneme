@@ -228,16 +228,19 @@ fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
                                             // or a nested block does not fail the
                                             // outer function closed (Strix
                                             // CWE-697, round 6 finding).
-                                            let decoy = guard_body.contains("= ||")
+                                            // `return Err` must be present in the
+                                            // guard body and NOT inside a closure or
+                                            // nested fn (which would be a decoy).
+                                            // Ordinary `if { .. }` bodies are fine:
+                                            // the guard itself is an if.
+                                            let has_err = guard_body.contains("return Err(")
+                                                || guard_body.contains("return Err (");
+                                            let closure_decoy = guard_body.contains("= ||")
                                                 || guard_body.contains("= |")
                                                 || guard_body.contains("fn ")
-                                                || guard_body.contains("{ return Err(");
-                                            guarded = !decoy
-                                                && (guard_body.starts_with("return Err(")
-                                                    || guard_body.starts_with("return Err (")
-                                                    || guard_body
-                                                        .lines()
-                                                        .any(|l| l.contains("return Err(")));
+                                                || guard_body.contains("| record |")
+                                                || guard_body.contains("|r|");
+                                            guarded = has_err && !closure_decoy;
                                             break;
                                         }
                                     }

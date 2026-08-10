@@ -264,15 +264,19 @@ fn judge(src: &str) -> Vec<String> {
     // it appears inside `.any(|..| { .. })` with no `let` binding of it and no
     // separate `return true;`. A trailing `});` contains a `;` but is the
     // closure close, not another statement after the comparison.
+    // tail_form: the digest comparison must appear as a tail expression in
+    // the `.any(|..| { .. })` closure: present, not bound to a `let`, with no
+    // separate `return true;` (Strix CWE-697, round 8 finding). A trailing
+    // `});` is the closure close, not another statement.
     let tail_form = block.contains(digest_cmp)
-        && !block
-            .lines()
-            .any(|l| l.contains("let ") && l.contains("== evidence_hash"))
+        && !block.lines().any(|l| {
+            let t = l.trim();
+            (t.starts_with("let ") || t.starts_with("let_")) && t.contains("== evidence_hash")
+        })
         && !block.contains("return true;")
-        && block.contains(".any(|")
         && block.rfind(digest_cmp).is_some_and(|cmp_at| {
             let after = block[cmp_at + digest_cmp.len()..].trim_start();
-            !after.starts_with(';') && !after.starts_with(") ;")
+            !after.starts_with("; ") && !after.starts_with(";\n") && !after.starts_with(";;")
         });
     if !guarded_form && !tail_form {
         problems.push(String::from(
