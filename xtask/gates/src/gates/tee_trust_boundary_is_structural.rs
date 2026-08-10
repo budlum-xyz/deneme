@@ -194,17 +194,45 @@ fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
     });
     let live_verifier_call = match sign_with_privacy_block {
         Some(body) => {
-            // Attestation checks must GATE the flow as conditions, not as
-            // bindings. Normalize whitespace, then require each check to be
-            // used in an `if` guard (Strix CWE-697, round 5 finding: renamed
-            // no-op bindings still bypass a bare substring check).
-            let normalized_body = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            let measurement_gates_flow =
-                normalized_body.contains("if !attestation.verify_measurement(");
-            let backend_gates_flow = normalized_body.contains("if attestation.backend !=");
-            let report_gates_flow = normalized_body.contains("if !attestation.verify_report_data(");
-            normalized_body.contains("verifier: &dyn TeeQuoteVerifier")
-                && normalized_body.contains("let attestation = verifier.verify_quote(&quote)")
+            // Each attestation predicate must appear in a fail-closed guard
+            // that returns an error from sign_with_privacy. Presence alone is
+            // insufficient: `let measurement_ok = attestation.verify_measurement(..)`
+            // still leaves an unconditional success path (Strix CWE-697,
+            // round 5 finding: fail-open branches).
+            let has_rejecting_guard = |needle: &str| {
+                body.find(needle).is_some_and(|guard_start| {
+                    let guard = &body[guard_start..];
+                    match guard.find('{') {
+                        Some(open) => {
+                            let mut depth = 0usize;
+                            let mut guarded = false;
+                            for (idx, ch) in guard[open..].char_indices() {
+                                match ch {
+                                    '{' => depth += 1,
+                                    '}' => {
+                                        depth = depth.saturating_sub(1);
+                                        if depth == 0 {
+                                            let guard_body = &guard[open + 1..=open + idx];
+                                            guarded = guard_body.contains("return Err(")
+                                                || guard_body.contains("return Err (");
+                                            break;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            guarded
+                        }
+                        None => false,
+                    }
+                })
+            };
+            let measurement_gates_flow = has_rejecting_guard("if !attestation.verify_measurement(");
+            let backend_gates_flow = has_rejecting_guard("if attestation.backend !=");
+            let report_gates_flow = has_rejecting_guard("if !attestation.verify_report_data(");
+            body.contains("verifier: &dyn TeeQuoteVerifier")
+                && (body.contains("let attestation = verifier.verify_quote(&quote)")
+                    || body.contains("let attestation=verifier.verify_quote(&quote)"))
                 && measurement_gates_flow
                 && backend_gates_flow
                 && report_gates_flow

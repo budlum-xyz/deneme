@@ -133,6 +133,17 @@ fn collect(root: &Path) -> Result<String, String> {
     std::fs::read_to_string(&p).map_err(|e| format!("cannot read {}: {e}", p.display()))
 }
 
+/// True if `text` contains any unit-`Ok` success form: `Ok(())` or a typed
+/// `Ok::<T, E>(())` variant. Literal matching misses the typed forms (Strix
+/// CWE-697, round 5 finding).
+fn ok_success_in(text: &str) -> bool {
+    text.contains("Ok(())")
+        || text.contains("Ok::<(),")
+        || text.contains("Ok::<_, String>(())")
+        || text.contains("Ok::<(), String>(())")
+        || text.contains("Ok::<_, _>(())")
+}
+
 fn judge(src: &str) -> Vec<String> {
     let mut problems = Vec::new();
 
@@ -217,12 +228,12 @@ fn judge(src: &str) -> Vec<String> {
                 }
             }
             let verify_block = &verify_rest[..verify_end];
-            let ok_in_verify = verify_block.contains("Ok(())");
-            let ok_before = block[..verify_start].contains("Ok(())");
-            let ok_after = verify_rest[verify_end..].contains("Ok(())");
+            let ok_in_verify = ok_success_in(verify_block);
+            let ok_before = ok_success_in(&block[..verify_start]);
+            let ok_after = ok_success_in(&verify_rest[verify_end..]);
             // Also: an `if !tx.verify() { Ok(()) }` guard would put the
             // success in a *failed-verify* branch - reject it by requiring
-            // there be no `Ok(())` before the positive verify block.
+            // there be no success before the positive verify block.
             ok_in_verify && !ok_before && !ok_after
         });
         if has_ok_success && !guarded_success {

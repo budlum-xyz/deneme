@@ -213,20 +213,23 @@ fn judge(src: &str) -> Vec<String> {
     // evidence_hash`). A renamed no-op binding still bypasses a bare
     // substring check (Strix CWE-697, round 5 finding: arbitrary `let`
     // binding).
-    // The digest comparison must be used as a CONDITION (`if .. ==
-    // evidence_hash { .. }`), not assigned to any binding. Detect the
-    // binding form directly: a line `let <name> = .. == evidence_hash`.
-    let digest_bound = block.lines().any(|line| {
-        let t = line.trim();
-        (t.starts_with("let ") || t.starts_with("let_"))
-            && t.contains("== evidence_hash")
-            && !t.trim_start().starts_with("if ")
-    });
-    let digest_as_condition =
-        block.contains("if sha2::Sha256::digest(&bytes).as_slice() == evidence_hash");
-    if digest_bound && !digest_as_condition {
+    // The digest comparison must drive the success. Two legitimate forms:
+    //   1. `if sha2::Sha256::digest(..) == evidence_hash { return true; }`
+    //      (explicit guarded success), or
+    //   2. `sha2::Sha256::digest(..) == evidence_hash` as a tail expression
+    //      (the closure's result, as in `any(|r| { ..; digest == hash })`).
+    // A comparison bound to an unused variable is cosmetic (Strix CWE-697,
+    // round 5 finding: cosmetic digest guards).
+    let guarded_form = block
+        .find("if sha2::Sha256::digest(&bytes).as_slice() == evidence_hash {")
+        .is_some();
+    let tail_form = block.contains("sha2::Sha256::digest(&bytes).as_slice() == evidence_hash")
+        && !block
+            .lines()
+            .any(|l| l.contains("let ") && l.contains("== evidence_hash"));
+    if !guarded_form && !tail_form {
         problems.push(String::from(
-            "account.rs binds the digest comparison to a variable inside the SlashValidator path instead of using it as a condition. The evidence check must gate the slash, otherwise it is cosmetic.",
+            "account.rs no longer drives the slash success with the digest comparison. The evidence check must either guard the success (`if digest == evidence_hash { return true; }`) or be the closure's tail expression; a cosmetic binding is insufficient.",
         ));
     }
 
