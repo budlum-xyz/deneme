@@ -208,22 +208,25 @@ fn judge(src: &str) -> Vec<String> {
         ));
     }
 
-    // Inert guards: a `let _x = ...` (or `let _ = ...`) assignment that only
-    // mentions the protected expressions does not enforce anything. The
-    // comparison must be USED, e.g. `if sha2::Sha256::digest(..) == evidence_hash`.
-    // Reject a block whose only digest comparison is a no-op binding (Strix
-    // CWE-697, round 5 finding: inert substring checks).
-    let inert = block.contains("let _keep_gate_happy = evidence_hash")
-        || block.contains("let _ = evidence_hash")
-        || block.contains("let _unused = evidence_hash")
-        || block.contains(
-            "let _keep_gate_happy = sha2::Sha256::digest(&bytes).as_slice() == evidence_hash",
-        )
-        || block.contains("let _ = sha2::Sha256::digest(&bytes).as_slice() == evidence_hash")
-        || block.contains("let _unused = sha2::Sha256::digest(&bytes).as_slice() == evidence_hash");
-    if inert {
+    // The digest comparison must be used as a CONDITION (`if .. ==
+    // evidence_hash { .. }`), not assigned to any binding (`let x = .. ==
+    // evidence_hash`). A renamed no-op binding still bypasses a bare
+    // substring check (Strix CWE-697, round 5 finding: arbitrary `let`
+    // binding).
+    // The digest comparison must be used as a CONDITION (`if .. ==
+    // evidence_hash { .. }`), not assigned to any binding. Detect the
+    // binding form directly: a line `let <name> = .. == evidence_hash`.
+    let digest_bound = block.lines().any(|line| {
+        let t = line.trim();
+        (t.starts_with("let ") || t.starts_with("let_"))
+            && t.contains("== evidence_hash")
+            && !t.trim_start().starts_with("if ")
+    });
+    let digest_as_condition =
+        block.contains("if sha2::Sha256::digest(&bytes).as_slice() == evidence_hash");
+    if digest_bound && !digest_as_condition {
         problems.push(String::from(
-            "account.rs mentions evidence_hash only in an inert (no-op) binding inside the SlashValidator path. The digest comparison must actually be used to gate the slash, otherwise the evidence check is cosmetic.",
+            "account.rs binds the digest comparison to a variable inside the SlashValidator path instead of using it as a condition. The evidence check must gate the slash, otherwise it is cosmetic.",
         ));
     }
 
