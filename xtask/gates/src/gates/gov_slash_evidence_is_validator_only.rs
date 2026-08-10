@@ -215,7 +215,12 @@ fn judge(src: &str) -> Vec<String> {
     // CWE-697, round 5 finding: inert substring checks).
     let inert = block.contains("let _keep_gate_happy = evidence_hash")
         || block.contains("let _ = evidence_hash")
-        || block.contains("let _unused = evidence_hash");
+        || block.contains("let _unused = evidence_hash")
+        || block.contains(
+            "let _keep_gate_happy = sha2::Sha256::digest(&bytes).as_slice() == evidence_hash",
+        )
+        || block.contains("let _ = sha2::Sha256::digest(&bytes).as_slice() == evidence_hash")
+        || block.contains("let _unused = sha2::Sha256::digest(&bytes).as_slice() == evidence_hash");
     if inert {
         problems.push(String::from(
             "account.rs mentions evidence_hash only in an inert (no-op) binding inside the SlashValidator path. The digest comparison must actually be used to gate the slash, otherwise the evidence check is cosmetic.",
