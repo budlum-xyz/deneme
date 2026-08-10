@@ -1,0 +1,281 @@
+//! Governance slash evidence gate (Round 4 finding).
+//!
+//! PR #149 fixed a HIGH (Strix CWE-345, deneme round 3 PR #255/#261):
+//! `SlashValidator` used to accept a slashing record from ANY role as
+//! evidence. The fix requires `record.report.role == VALIDATOR` and digests
+//! the full report.
+//!
+//! Strix CWE-697 follow-ups: substring checks anywhere in the file can be
+//! satisfied by bait snippets (comments, strings, raw strings, earlier
+//! decoy arms) outside the live `SlashValidator` path. This gate strips
+//! comments and literals, anchors to the live `fn execute_proposal` ->
+//! `match &proposal.p_type` path, and validates the arm found there.
+
+use std::path::Path;
+
+fn account_path(root: &Path) -> std::path::PathBuf {
+    root.join("src/core/account.rs")
+}
+
+fn collect(root: &Path) -> Result<String, String> {
+    let p = account_path(root);
+    std::fs::read_to_string(&p).map_err(|e| format!("cannot read {}: {e}", p.display()))
+}
+
+/// Strip Rust comments, ordinary strings and raw strings (preserving line
+/// structure) so dead text cannot satisfy the gate (Strix CWE-697).
+fn strip_rust_noise(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        if bytes[pos..].starts_with(b"//") {
+            while pos < bytes.len() && bytes[pos] != b'\n' {
+                out.push(' ');
+                pos += 1;
+            }
+            continue;
+        }
+        if bytes[pos..].starts_with(b"/*") {
+            // Rust block comments nest (`/* outer /* inner */ tail */`); a
+            // flat scan stops at the first `*/` and leaves the tail looking
+            // like live code. Track depth instead (Strix CWE-697).
+            out.push(' ');
+            out.push(' ');
+            pos += 2;
+            let mut depth = 1usize;
+            while pos < bytes.len() && depth > 0 {
+                if bytes[pos..].starts_with(b"/*") {
+                    depth += 1;
+                    out.push(' ');
+                    out.push(' ');
+                    pos += 2;
+                    continue;
+                }
+                if bytes[pos..].starts_with(b"*/") {
+                    depth -= 1;
+                    out.push(' ');
+                    out.push(' ');
+                    pos += 2;
+                    continue;
+                }
+                out.push(if bytes[pos] == b'\n' { '\n' } else { ' ' });
+                pos += 1;
+            }
+            continue;
+        }
+        if bytes[pos] == b'r' || bytes[pos] == b'b' {
+            let mut scan = pos;
+            if bytes[scan] == b'b' {
+                scan += 1;
+            }
+            if scan < bytes.len() && bytes[scan] == b'r' {
+                scan += 1;
+                let mut hash_count = 0usize;
+                while scan < bytes.len() && bytes[scan] == b'#' {
+                    hash_count += 1;
+                    scan += 1;
+                }
+                if scan < bytes.len() && bytes[scan] == b'"' {
+                    let mut end = scan + 1;
+                    while end < bytes.len() {
+                        if bytes[end] == b'"' {
+                            let mut hashes = 0usize;
+                            let mut cursor = end + 1;
+                            while cursor < bytes.len()
+                                && bytes[cursor] == b'#'
+                                && hashes < hash_count
+                            {
+                                hashes += 1;
+                                cursor += 1;
+                            }
+                            if hashes == hash_count {
+                                break;
+                            }
+                        }
+                        end += 1;
+                    }
+                    let mut blank_to = if end < bytes.len() {
+                        end + 1 + hash_count
+                    } else {
+                        bytes.len()
+                    };
+                    if blank_to > bytes.len() {
+                        blank_to = bytes.len();
+                    }
+                    while pos < blank_to {
+                        out.push(if bytes[pos] == b'\n' { '\n' } else { ' ' });
+                        pos += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+        if bytes[pos] == b'"' {
+            out.push(' ');
+            pos += 1;
+            while pos < bytes.len() && bytes[pos] != b'"' {
+                if bytes[pos] == b'\\' && pos + 1 < bytes.len() {
+                    pos += 2;
+                    continue;
+                }
+                out.push(if bytes[pos] == b'\n' { '\n' } else { ' ' });
+                pos += 1;
+            }
+            if pos < bytes.len() {
+                out.push(' ');
+                pos += 1;
+            }
+            continue;
+        }
+        out.push(bytes[pos] as char);
+        pos += 1;
+    }
+    out
+}
+
+/// Extract the live `SlashValidator` arm body from the noise-stripped view:
+/// `fn execute_proposal` -> `match &proposal.p_type` -> arm `=> { .. }`.
+fn slash_validator_block(src: &str) -> Option<String> {
+    let clean = strip_rust_noise(src);
+    let exec_start = clean.find("fn execute_proposal")?;
+    let exec_src = &clean[exec_start..];
+    let match_start = exec_src.find("match &proposal.p_type")?;
+    let match_src = &exec_src[match_start..];
+    let start = match_src.find("ProposalType::SlashValidator {")?;
+    let rest = &match_src[start..];
+    let open = rest.find('{')?;
+    let mut depth = 0i32;
+    let mut variant_end = None;
+    for (offset, ch) in rest[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    variant_end = Some(open + offset + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let variant_end = variant_end?;
+    let after = &rest[variant_end..];
+    let arrow = after.find("=>")?;
+    let body_open = after[arrow..].find('{')? + arrow;
+    let mut body_depth = 0i32;
+    for (offset, ch) in after[body_open..].char_indices() {
+        match ch {
+            '{' => body_depth += 1,
+            '}' => {
+                body_depth -= 1;
+                if body_depth == 0 {
+                    return Some(after[..=body_open + offset].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn judge(src: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+
+    let Some(block) = slash_validator_block(src) else {
+        problems.push(String::from(
+            "account.rs no longer contains the live SlashValidator branch; the governance slash protection is missing.",
+        ));
+        return problems;
+    };
+
+    if !block.contains("record.report.role != crate::registry::role::roles::VALIDATOR") {
+        problems.push(String::from(
+            "account.rs no longer requires the slashing evidence to be a VALIDATOR record inside the SlashValidator path. Any-role evidence reopens the governance-slash bypass (CWE-345).",
+        ));
+    }
+
+    if !block.contains("bincode::serialize(&record.report)") {
+        problems.push(String::from(
+            "account.rs no longer digests the full serialized SlashingReport inside the SlashValidator path. A partial or hand-built digest weakens the evidence binding.",
+        ));
+    }
+
+    if !block.contains("sha2::Sha256::digest(&bytes).as_slice() == evidence_hash") {
+        problems.push(String::from(
+            "account.rs no longer compares the computed evidence digest against the provided evidence_hash inside the SlashValidator path. Mentioning evidence_hash without the equality check leaves the slash evidence unverifiable.",
+        ));
+    }
+
+    problems
+}
+
+pub fn run(root: &Path) -> Result<String, String> {
+    let src = collect(root)?;
+    let problems = judge(&src);
+    if problems.is_empty() {
+        return Ok(String::from(
+            "governance-slash gate OK: the live SlashValidator branch requires a VALIDATOR record with a full-report digest compared against the evidence hash.",
+        ));
+    }
+    Err(problems.join("\n"))
+}
+
+fn check_canary(problems: &mut Vec<String>, name: &str, src: &str) {
+    if !judge(src)
+        .iter()
+        .any(|p| p.contains("VALIDATOR record inside the SlashValidator path"))
+    {
+        problems.push(format!("VACUOUS: {name} steered the gate."));
+    }
+}
+
+pub fn self_test() -> Result<String, String> {
+    let mut problems = Vec::new();
+
+    let good = "\
+fn execute_proposal(&mut self, proposal: &Proposal) {
+    match &proposal.p_type {
+        ProposalType::SlashValidator { address, evidence_hash } => {
+            if record.report.role != crate::registry::role::roles::VALIDATOR {
+                return false;
+            }
+            let bytes = bincode::serialize(&record.report).expect(\"x\");
+            if sha2::Sha256::digest(&bytes).as_slice() == evidence_hash {
+                return true;
+            }
+        }
+    }
+}
+";
+    if !judge(good).is_empty() {
+        problems.push(String::from(
+            "BROKEN: the protected form was reported as missing.",
+        ));
+    }
+
+    let live = "fn execute_proposal(&mut self, proposal: &Proposal) { match &proposal.p_type { ProposalType::SlashValidator { address, evidence_hash } => { return true; } } }\n";
+
+    check_canary(&mut problems, "helper bait",
+        &format!("fn helper() {{ record.report.role != crate::registry::role::roles::VALIDATOR bincode::serialize(&record.report) sha2::Sha256::digest(&bytes).as_slice() == evidence_hash }}\n{live}"));
+
+    check_canary(&mut problems, "comment bait",
+        "fn execute_proposal(&mut self, proposal: &Proposal) { /* match &proposal.p_type { ProposalType::SlashValidator { address, evidence_hash } => { if record.report.role != crate::registry::role::roles::VALIDATOR { return false; } let bytes = bincode::serialize(&record.report).expect(\"x\"); if sha2::Sha256::digest(&bytes).as_slice() == evidence_hash { return true; } } } */ match &proposal.p_type { ProposalType::SlashValidator { address, evidence_hash } => { return true; } } }\n");
+
+    check_canary(&mut problems, "string bait",
+        "fn execute_proposal(&mut self, proposal: &Proposal) { let _d = \"match &proposal.p_type { ProposalType::SlashValidator { address, evidence_hash } => { if record.report.role != crate::registry::role::roles::VALIDATOR { return false; } } }\"; match &proposal.p_type { ProposalType::SlashValidator { address, evidence_hash } => { return true; } } }\n");
+
+    check_canary(&mut problems, "raw-string bait",
+        "fn execute_proposal(&mut self, proposal: &Proposal) { let _d = r#\"match &proposal.p_type { ProposalType::SlashValidator { address, evidence_hash } => { if record.report.role != crate::registry::role::roles::VALIDATOR { return false; } } }\"#; match &proposal.p_type { ProposalType::SlashValidator { address, evidence_hash } => { return true; } } }\n");
+
+    check_canary(&mut problems, "nested-comment bait",
+        "fn execute_proposal(&mut self, proposal: &Proposal) { /* outer /* inner match &proposal.p_type { ProposalType::SlashValidator { address, evidence_hash } => { if record.report.role != crate::registry::role::roles::VALIDATOR { return false; } } } */ tail */ match &proposal.p_type { ProposalType::SlashValidator { address, evidence_hash } => { return true; } } }\n");
+
+    if !problems.is_empty() {
+        return Err(problems.join("\n  "));
+    }
+    Ok(String::from(
+        "governance-slash gate self-test OK: the protected branch passes, bait outside the branch fails.",
+    ))
+}

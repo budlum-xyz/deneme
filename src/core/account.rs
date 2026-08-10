@@ -2229,6 +2229,24 @@ mod tests {
     use super::*;
     use crate::crypto::primitives::KeyPair;
     #[test]
+    fn test_zero_address_non_genesis_rejected() {
+        // CWE-306 (PR #237): a zero-address sender used to skip all
+        // validation. Only the canonical genesis transaction (one that
+        // `tx.verify()` accepts) may originate from the zero address; any
+        // other zero-address transaction must be rejected.
+        let state = AccountState::new();
+        // Unsigned tx from the zero address: verify() fails, so the
+        // transaction must be rejected rather than bypassed.
+        let tx = Transaction::new(Address::zero(), Address::zero(), 0, Vec::new());
+        let err = state
+            .validate_transaction_with_context(&tx, 0, 0)
+            .unwrap_err();
+        assert!(
+            err.contains("zero-address sender is only valid for the canonical genesis transaction"),
+            "expected the canonical-genesis-only rejection, got: {err}"
+        );
+    }
+    #[test]
     fn test_new_account() {
         let account = Account::new(Address::zero());
         assert_eq!(account.balance, 0);

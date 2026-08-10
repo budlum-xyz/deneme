@@ -45,15 +45,18 @@ mod gates {
     pub mod coding_audit_samples_the_relationship;
     pub mod content_encryption_is_declared_and_bound;
     pub mod every_fuzz_target_is_run;
+    pub mod gov_slash_evidence_is_validator_only;
     pub mod hash_inputs_are_length_prefixed;
     pub mod mermaid;
     pub mod no_new_shell_gates;
     pub mod security_scans_can_fail;
     pub mod self_derived_ids_cover_every_field;
     pub mod suppressions_are_justified;
+    pub mod tee_trust_boundary_is_structural;
     pub mod the_image_builds_what_the_manifest_declares;
     pub mod wire_fields_are_signed;
     pub mod workflows_produce_jobs;
+    pub mod zero_address_sender_is_verified;
 }
 
 /// One gate, as the runner sees it.
@@ -151,6 +154,24 @@ const GATES: &[Gate] = &[
         replaces: None,
         run: gates::no_new_shell_gates::run,
         self_test: gates::no_new_shell_gates::self_test,
+    },
+    Gate {
+        name: "zero-address-sender-verified",
+        replaces: None,
+        run: gates::zero_address_sender_is_verified::run,
+        self_test: gates::zero_address_sender_is_verified::self_test,
+    },
+    Gate {
+        name: "tee-trust-boundary-structural",
+        replaces: None,
+        run: gates::tee_trust_boundary_is_structural::run,
+        self_test: gates::tee_trust_boundary_is_structural::self_test,
+    },
+    Gate {
+        name: "gov-slash-evidence-validator-only",
+        replaces: None,
+        run: gates::gov_slash_evidence_is_validator_only::run,
+        self_test: gates::gov_slash_evidence_is_validator_only::self_test,
     },
 ];
 
