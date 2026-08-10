@@ -170,7 +170,10 @@ fn measure(root: &Path) -> Result<Inventory, String> {
     let corpus_root = root.join("fuzz/corpus");
     if let Ok(entries) = std::fs::read_dir(&corpus_root) {
         for entry in entries.flatten() {
-            if !entry.path().is_dir() {
+            let Ok(entry_kind) = entry.file_type() else {
+                continue;
+            };
+            if !entry_kind.is_dir() {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();

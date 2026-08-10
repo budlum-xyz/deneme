@@ -44,7 +44,7 @@ jobs:
         # Kanit .github/clippy-extra-baseline.txt). Sifira indirme kademeli/azimli.
         run: |
           set -euo pipefail
-          bash ./scripts/check-clippy-extra.sh --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- clippy-extra --self-test
           cargo clippy --all-targets --message-format=json -- -W clippy::pedantic -W clippy::nursery > /tmp/clippy-extra.json 2>/dev/null || true
           # Diagnostic only: the ratchet reports a count, and the JSON it counts
           # lives in the runner's /tmp, so a trip leaves nothing to inspect.
@@ -52,7 +52,7 @@ jobs:
           # It writes nothing and runs before the gate, so it cannot change the
           # verdict.
           python3 ./scripts/clippy-extra-report.py /tmp/clippy-extra.json
-          bash ./scripts/check-clippy-extra.sh /tmp/clippy-extra.json
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- clippy-extra /tmp/clippy-extra.json
       - name: "Feature matrix: pq-ml-dsa solo"
         run: |
           set -euo pipefail
@@ -101,17 +101,17 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features pq-dilithium 2>&1 | tee /tmp/doc.log
           echo "cargo doc: warnings as errors - passed"
       - name: Rozet kanaryasi (log'dan bagimsiz)
-        run: bash ./scripts/check-badges-are-current.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- badges-are-current --self-test
       - name: Rozet guncel mi (README = olculen test sayisi)
-        run: bash ./scripts/check-badges-are-current.sh /tmp/libtests.log
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- badges-are-current /tmp/libtests.log
       - name: Odenmis icerik kanaryasi
-        run: bash ./scripts/check-paid-content-cannot-be-read-for-free.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- paid-content-cannot-be-read-for-free --self-test
       - name: Odenmis icerik bedava okunamaz
-        run: bash ./scripts/check-paid-content-cannot-be-read-for-free.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- paid-content-cannot-be-read-for-free
       - name: Uretilebilir icerik kanaryasi
-        run: bash ./scripts/check-generated-content-is-verifiable.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- generated-content-is-verifiable --self-test
       - name: Uretilebilir icerik dogrulanabilir
-        run: bash ./scripts/check-generated-content-is-verifiable.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- generated-content-is-verifiable
       # Tarif edilen bir nesnede tarif TEK kopyadir. Jeneratoru degistiren bir
       # duzenleme yanlis resim uretmez, artik hic uretilemeyen bir nesne uretir:
       # id dogrulamayi birakir ve geri donulecek bayt diskte yoktur. Kendisiyle
@@ -120,33 +120,33 @@ jobs:
       # zaten olcegi birakmis bir degere uygulaniyordu, iki uc rengi de atiyor
       # ve duz siyah cizyordu, tutarli bicimde hash'leyerek.
       - name: Sifir-depolama vektor kanaryasi
-        run: bash ./scripts/check-zero-storage-bytes-are-frozen.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- zero-storage-bytes-are-frozen --self-test
       - name: Uretilen baytlar dondurulmus vektore bagli
-        run: bash ./scripts/check-zero-storage-bytes-are-frozen.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- zero-storage-bytes-are-frozen
       - name: Ulasilamayan kapi kanaryasi
-        run: bash ./scripts/check-guards-are-reachable.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- guards-are-reachable --self-test
       - name: Ulasilamayan kapi sayisi artmadi
-        run: bash ./scripts/check-guards-are-reachable.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- guards-are-reachable
       - name: Kendi kaynagini okuyan test kanaryasi
-        run: bash ./scripts/check-source-reading-tests-are-narrowed.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- source-reading-tests-are-narrowed --self-test
       - name: Kendi kaynagini okuyan testler daraltilmis
-        run: bash ./scripts/check-source-reading-tests-are-narrowed.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- source-reading-tests-are-narrowed
       - name: Cakisma isareti kanaryasi
-        run: bash ./scripts/check-no-conflict-markers-are-committed.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- no-conflict-markers --self-test
       - name: Cakisma isareti agacta yok
-        run: bash ./scripts/check-no-conflict-markers-are-committed.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- no-conflict-markers
       - name: Onarim tetikleyicisi kanaryasi
-        run: bash ./scripts/check-repair-fires-on-loss.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- repair-fires-on-loss --self-test
       - name: Onarim kayipta atesliyor
-        run: bash ./scripts/check-repair-fires-on-loss.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- repair-fires-on-loss
       - name: Lubot algi kanaryasi
-        run: bash ./scripts/check-lubot-reads-but-does-not-generate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- lubot-reads-but-does-not-generate --self-test
       - name: Lubot okur, uretmez
-        run: bash ./scripts/check-lubot-reads-but-does-not-generate.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- lubot-reads-but-does-not-generate
       - name: Turetilmis icerik kanaryasi
-        run: bash ./scripts/check-derived-content-stays-byte-exact.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- derived-content-stays-byte-exact --self-test
       - name: Turetilmis icerik bayt-kesin
-        run: bash ./scripts/check-derived-content-stays-byte-exact.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- derived-content-stays-byte-exact
       # Turetilmis bir nesne kendi baytini tutmaz: okumak master'i getirip
       # yeniden hesaplamak demek. Master gidince depolama kucumez, turev yok
       # olur, ve sessizce olur: turev manifesti hala duruyor, hala gecerli
@@ -161,17 +161,17 @@ jobs:
       # gecti, cunku testler esikleri birbiriyle karsilastiriyordu ve iki taraf da
       # birlikte kaymisti. Rust disinda yeniden hesaplayarak yakalandi.
       - name: Esik oranlari tek olcek kanaryasi
-        run: bash ./scripts/check-threshold-rates-share-one-scale.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- threshold-rates-share-one-scale --self-test
       - name: Esik oranlari tek olcekte
-        run: bash ./scripts/check-threshold-rates-share-one-scale.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- threshold-rates-share-one-scale
       - name: Turev kaliciligi kanaryasi
-        run: bash ./scripts/check-a-derivation-cannot-outlive-its-master.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- a-derivation-cannot-outlive-its-master --self-test
       - name: Bir turev master'indan uzun yasayamaz
-        run: bash ./scripts/check-a-derivation-cannot-outlive-its-master.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- a-derivation-cannot-outlive-its-master
       - name: Iddia birimi kanaryasi
-        run: bash ./scripts/check-reduction-claims-state-both-units.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- reduction-claims-state-both-units --self-test
       - name: Iddia iki birimi de soyluyor
-        run: bash ./scripts/check-reduction-claims-state-both-units.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- reduction-claims-state-both-units
 
 
   budzero:
@@ -224,11 +224,11 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Kapı kanaryası (vacuous değil kanıtı)
-        run: bash ./scripts/check-bud-e2e.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- bud-e2e --self-test
       - name: bud_e2e - 9 invariant + 3 e2e (isim kanaryalı)
         run: |
           cargo test --lib bud_e2e 2>&1 | tee /tmp/bud-e2e.txt
-          bash ./scripts/check-bud-e2e.sh /tmp/bud-e2e.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- bud-e2e /tmp/bud-e2e.txt
 
   economy-invariants:
     # : EIP-1559 + reward-pool + committed-supply denominator locks.
@@ -249,12 +249,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Economy invariant gate canary
-        run: bash ./scripts/check-economy-invariants.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- economy-invariants --self-test
       - name:  named invariant tests
         run: |
           set -euo pipefail
           cargo test --lib 2>&1 | tee /tmp/economy-invariants.txt
-          bash ./scripts/check-economy-invariants.sh /tmp/economy-invariants.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- economy-invariants /tmp/economy-invariants.txt
 
   fork-choice-gate:
     # : per-domain fork-choice/lifecycle named tests.
@@ -275,12 +275,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Fork-choice gate canary
-        run: bash ./scripts/check-fork-choice-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- fork-choice --self-test
       - name:  fork-choice tests
         run: |
           set -euo pipefail
           cargo test --lib 2>&1 | tee /tmp/fork-choice-gate.txt
-          bash ./scripts/check-fork-choice-gate.sh /tmp/fork-choice-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- fork-choice /tmp/fork-choice-gate.txt
 
   storage-provider-gate:
     # : StorageProvider trait + mock implementation named tests.
@@ -300,19 +300,19 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: StorageProvider gate canary
-        run: bash ./scripts/check-storage-provider-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-provider --self-test
       # The proof-boundary script existed in scripts/ but no job ran it, so it
       # proved nothing about any commit. Wired here rather than into a new job
       # because it is source-only and needs no build.
       - name: Storage proof boundary canary
-        run: bash ./scripts/check-storage-proof-production-boundary.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-proof-production-boundary --self-test
       - name: Storage proof production boundary
-        run: bash ./scripts/check-storage-proof-production-boundary.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-proof-production-boundary
       - name:  StorageProvider tests
         run: |
           set -euo pipefail
           cargo test --lib 2>&1 | tee /tmp/storage-provider-gate.txt
-          bash ./scripts/check-storage-provider-gate.sh /tmp/storage-provider-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-provider /tmp/storage-provider-gate.txt
 
   node-classification-gate:
     # : full/archive node classification + pruning policy named tests.
@@ -333,12 +333,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Node classification gate canary
-        run: bash ./scripts/check-node-classification-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- node-classification --self-test
       - name:  node classification tests
         run: |
           set -euo pipefail
           cargo test --lib node 2>&1 | tee /tmp/node-classification-gate.txt
-          bash ./scripts/check-node-classification-gate.sh /tmp/node-classification-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- node-classification /tmp/node-classification-gate.txt
 
   network-hardening-gate:
     # : network hardening named tests.
@@ -359,14 +359,14 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Network hardening gate canary
-        run: bash ./scripts/check-network-hardening-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- network-hardening --self-test
       - name:  network hardening tests
         run: |
           set -euo pipefail
           cargo test --lib 2>&1 | tee /tmp/network-hardening-gate.txt
           cargo test --lib peer_rate_limit_security_profile 2>&1 | tee -a /tmp/network-hardening-gate.txt
           cargo test --lib h5_ 2>&1 | tee -a /tmp/network-hardening-gate.txt
-          bash ./scripts/check-network-hardening-gate.sh /tmp/network-hardening-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- network-hardening /tmp/network-hardening-gate.txt
 
 
 
@@ -380,9 +380,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Gate self-test (canary)
-        run: bash ./scripts/check-domain-tags.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- domain-tags --self-test
       - name: Inventory matches code
-        run: bash ./scripts/check-domain-tags.sh .
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- domain-tags
 
   poa-compliance-gate:
     # : MASAK/AML hooks are isolated to PoA domains only.
@@ -402,12 +402,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: PoA compliance gate self-test
-        run: bash ./scripts/check-poa-compliance-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- poa-compliance --self-test
       - name:  PoA compliance tests
         run: |
           set -euo pipefail
           cargo test --lib poa_compliance 2>&1 | tee /tmp/poa-compliance-gate.txt
-          bash ./scripts/check-poa-compliance-gate.sh /tmp/poa-compliance-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- poa-compliance /tmp/poa-compliance-gate.txt
 
   governance-invariants:
     # : minimal on-chain governance parameter whitelist + activation timelock.
@@ -427,12 +427,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Governance invariant gate self-test
-        run: bash ./scripts/check-governance-invariants.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- governance-invariants --self-test
       - name:  governance invariant tests
         run: |
           set -euo pipefail
           cargo test --lib governance 2>&1 | tee /tmp/governance-invariants-gate.txt
-          bash ./scripts/check-governance-invariants.sh /tmp/governance-invariants-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- governance-invariants /tmp/governance-invariants-gate.txt
 
   wallet-core-gate:
     # : wallet-core multisig/social recovery primitives.
@@ -451,14 +451,14 @@ jobs:
           shared-key: wallet-core
           workspaces: wallet-core
       - name: Wallet Core gate self-test
-        run: bash ./scripts/check-wallet-core-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- wallet-core-gate --self-test
       - name: wallet-core tests
         run: |
           set -euo pipefail
           cargo test --manifest-path wallet-core/Cargo.toml 2>&1 | tee /tmp/wallet-core-gate.txt
           cargo test --manifest-path wallet-core/Cargo.toml --features uniffi --lib binding 2>&1 | tee -a /tmp/wallet-core-gate.txt
           cargo test --manifest-path wallet-core/Cargo.toml --features wasm --lib binding 2>&1 | tee -a /tmp/wallet-core-gate.txt
-          bash ./scripts/check-wallet-core-gate.sh /tmp/wallet-core-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- wallet-core-gate /tmp/wallet-core-gate.txt
 
   # ============================  / Bolum 4 (BNS gate) ============================
   bns-gate:
@@ -480,11 +480,11 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Kapi kanaryasi (vacuous degil kaniti)
-        run: bash ./scripts/check-bns-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- bns-gate --self-test
       - name: bns - 8 test (isim kanaryali)
         run: |
           cargo test --lib bns 2>&1 | tee /tmp/bns-gate.txt
-          bash ./scripts/check-bns-gate.sh /tmp/bns-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- bns-gate /tmp/bns-gate.txt
 
   # ============================  /  (P0) ============================
   # Strict mod: aşağıdaki tüm job'lar ilk günden FAIL kapısıdır (ruhu).
@@ -807,8 +807,8 @@ jobs:
           shared-key: budlum-core
       - name: Statik tarama + kanarya
         run: |
-          bash ./scripts/check-timing-safe.sh
-          bash ./scripts/check-timing-safe.sh --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- timing-safe
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- timing-safe --self-test
       - name: Dudect-tarzı istatistiksel zamanlama testi
         run: cargo bench --bench timing_safe
 
@@ -912,12 +912,12 @@ jobs:
           tar -xzf /tmp/nextest.tar.gz -C ~/.cargo/bin/
           cargo llvm-cov --version && cargo nextest --version
       - name: Kapi kanaryasi (vacuous-gate korumasi)
-        run: bash ./scripts/check-coverage.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- coverage --self-test
       - name: Olcum + ratchet kapisi
         run: |
           mkdir -p coverage
           cargo llvm-cov nextest --lib --json --output-path coverage/cov.json
-          bash ./scripts/check-coverage.sh coverage/cov.json
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- coverage coverage/cov.json
       - name: Modül analizi kanaryası (vacuous değil)
         run: python3 ./scripts/check_module_coverage.py --self-test
       - name: Modül coverage raporu - budlum (baselines 2. adımda, vacuous-gate YOK)
@@ -964,18 +964,18 @@ jobs:
           actionlint --version
       - name: actionlint kapisi + kanarya
         run: |
-          bash ./scripts/check-actionlint.sh --self-test
-          bash ./scripts/check-actionlint.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- actionlint --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- actionlint
       - name: zizmor kapisi + kanarya
         run: |
-          bash ./scripts/check-zizmor.sh --self-test
-          bash ./scripts/check-zizmor.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- zizmor --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- zizmor
       # Gate scripts that no workflow invokes prove nothing but still get
       # counted as gates. Four had accumulated that way before this check.
       - name: kapi kablolamasi + kanarya
         run: |
-          bash ./scripts/check-gates-are-wired.sh --self-test
-          bash ./scripts/check-gates-are-wired.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- gates-are-wired --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- gates-are-wired
       # Kapilar Rust'a tasiniyor. Bir kapi ana dala neyin girecegine karar
       # verdigi icin guven sinirinin icinde, ve kabuk orasi icin kotu bir dil:
       # yanlis yazilmis bir degisken hata degil bos dizgidir, yani bir kontrol
@@ -995,15 +995,15 @@ jobs:
       # once, so the count is now a gate.
       - name: tipografik tire kapisi + kanarya
         run: |
-          bash ./scripts/check-no-unicode-dashes.sh --self-test
-          bash ./scripts/check-no-unicode-dashes.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- no-unicode-dashes --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- no-unicode-dashes
       # Bir fuzz hedefi ancak uc dosya ayni fikirdeyse fuzz'lar: harness,
       # fuzz/Cargo.toml'daki [[bin]], ve onu kosturan bir workflow. Uclusunden
       # biri eksikse hedef listede gorunur ve hicbir sey yapmaz.
       - name: fuzz hedefi kablolamasi + kanarya
         run: |
-          bash ./scripts/check-fuzz-targets-are-wired.sh --self-test
-          bash ./scripts/check-fuzz-targets-are-wired.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- fuzz-targets-are-wired --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- fuzz-targets-are-wired
       # COL_REG_SAME gated register continuity while being a free column
       # itself: no booleanity, no constraint on the 1-r_same side, and absent
       # from the LogUp argument. Writing zero before a read deleted the rule
@@ -1013,8 +1013,8 @@ jobs:
       # read of a new address returns zero", so the lie costs something.
       - name: kisit kapatan bayraklar pinli mi + kanarya
         run: |
-          bash ./scripts/check-gating-flags-are-pinned.sh --self-test
-          bash ./scripts/check-gating-flags-are-pinned.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- gating-flags-are-pinned --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- gating-flags-are-pinned
       # Every per opcode rule in the AIR runs under `builder.when(is_<op>)`.
       # Booleanity and the exclusivity sum force exactly one selector per row
       # but never say which one, so 29 of the 35 were free: an honest Assert
@@ -1024,8 +1024,8 @@ jobs:
       # from being added unbound.
       - name: AIR selector-opcode baglanmasi + kanarya
         run: |
-          bash ./scripts/check-air-selectors-are-opcode-bound.sh --self-test
-          bash ./scripts/check-air-selectors-are-opcode-bound.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- air-selectors-are-opcode-bound --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- air-selectors-are-opcode-bound
       # The memory argument decided whether a CPU row demands a memory entry
       # with `(is_load + is_store) * rs1_idx`, and rs1_idx is a register
       # number. `Store r0, r7, r2` asked the bus for seven copies of a row the
@@ -1035,8 +1035,8 @@ jobs:
       # the tree happened to use r1.
       - name: LogUp carpanlari boolean mi + kanarya
         run: |
-          bash ./scripts/check-logup-multipliers-are-boolean.sh --self-test
-          bash ./scripts/check-logup-multipliers-are-boolean.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- logup-multipliers-are-boolean --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- logup-multipliers-are-boolean
       # The AIR packs the CPU, register and memory tables into one matrix and
       # nothing keeps them the same length. A constraint reading a side table
       # must fire on the last row, not on the last CPU row. The register image
@@ -1047,8 +1047,8 @@ jobs:
       # opcode currently emits two memory events in one step.
       - name: tablolar arasi kontroller son satirda mi + kanarya
         run: |
-          bash ./scripts/check-cross-table-checks-use-last-row.sh --self-test
-          bash ./scripts/check-cross-table-checks-use-last-row.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- cross-table-checks-use-last-row --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- cross-table-checks-use-last-row
       # The Fiat-Shamir transcript carried the degrees, the commitments and the
       # public values, but not the FRI parameters, and those decide what a
       # proof is worth: measured, log_blowup 3 with 100 queries and 16 grinding
@@ -1060,8 +1060,8 @@ jobs:
       # time, because two sources of truth for one parameter set drift.
       - name: FRI parametreleri transcript'te ve turetilmis mi + kanarya
         run: |
-          bash ./scripts/check-security-parameters-are-derived.sh --self-test
-          bash ./scripts/check-security-parameters-are-derived.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- security-parameters-are-derived --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- security-parameters-are-derived
       # A transition constrains the difference between consecutive rows and
       # never says where the sequence starts. COL_EVENT_DIGEST_0 had only a
       # transition and a last-row comparison, so the whole accumulator could
@@ -1072,8 +1072,8 @@ jobs:
       # row, which is exactly why the missing one was easy to miss.
       - name: akumulatorlerin ilk satiri sabit mi + kanarya
         run: |
-          bash ./scripts/check-accumulators-pin-their-first-row.sh --self-test
-          bash ./scripts/check-accumulators-pin-their-first-row.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- accumulators-pin-their-first-row --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- accumulators-pin-their-first-row
       # Lt/Gt/Lte/Gte and And/Or/Xor answer from 64 bit columns, and the only
       # thing tying those to the register value was booleanity plus
       # sum(b_i * 2^i) == val. Goldilocks is 2^64 - 2^32 + 1, so every value
@@ -1084,8 +1084,8 @@ jobs:
       # decided.
       - name: bit ayristirmasi kanonik mi + kanarya
         run: |
-          bash ./scripts/check-bit-decompositions-are-canonical.sh --self-test
-          bash ./scripts/check-bit-decompositions-are-canonical.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- bit-decompositions-are-canonical --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- bit-decompositions-are-canonical
       # The VM halts Assert only on a zero condition; the AIR demanded exactly
       # 1. Those agree on 0 and 1 and nowhere else, and every test fed it a
       # comparison result, which is 0 or 1. BudL constrain(...) lowers to this
@@ -1094,8 +1094,8 @@ jobs:
       # an inverse witness rather than a comparison against a constant.
       - name: sifir testleri ters tanik kullaniyor mu + kanarya
         run: |
-          bash ./scripts/check-zero-tests-use-an-inverse-witness.sh --self-test
-          bash ./scripts/check-zero-tests-use-an-inverse-witness.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- zero-tests-use-an-inverse-witness --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- zero-tests-use-an-inverse-witness
       # WalletBindingCapabilities reported uniffi_mobile: true and
       # wasm_browser: true while the tree had no .udl file, no
       # uniffi::export, and no #[wasm_bindgen] anywhere. Both binding modules
@@ -1105,8 +1105,8 @@ jobs:
       # apart from one that means the work is done.
       - name: baglama iddiasi gercekle ortusuyor mu + kanarya
         run: |
-          bash ./scripts/check-binding-claims-match-reality.sh --self-test
-          bash ./scripts/check-binding-claims-match-reality.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- binding-claims-match-reality --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- binding-claims-match-reality
       # A module can compile, lint, pass its own tests and still never run.
       # `storage/mobile_self.rs` holds the rule that critical B.U.D. content
       # needs a paid replica rather than a phone that is only sometimes online.
@@ -1116,8 +1116,8 @@ jobs:
       # because anything invokes it. Fifteen other modules measured the same.
       - name: yetenek modulleri bagli mi + kanarya
         run: |
-          bash ./scripts/check-capability-modules-are-wired.sh --self-test
-          bash ./scripts/check-capability-modules-are-wired.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- capability-wiring --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- capability-wiring
       # B.U.D. storage cost `epochs * fee_per_epoch`, with no byte count in it,
       # so a 1 KiB and a 16 MiB shard cost the same for the same duration. The
       # client picks the size, so this was ordinary use rather than an attack.
@@ -1126,8 +1126,8 @@ jobs:
       # the price was computed and simply went unread.
       - name: depolama boyuta gore mi fiyatlaniyor + kanarya
         run: |
-          bash ./scripts/check-storage-is-priced-by-size.sh --self-test
-          bash ./scripts/check-storage-is-priced-by-size.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-is-priced-by-size --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-is-priced-by-size
       # Two entry points take a manifest an untrusted caller built.
       # `RegisterStorageManifest` ran `validate_untrusted`; `open_deal` ran
       # `verify_id` and stopped, and it is the path that also takes the payer's
@@ -1137,12 +1137,12 @@ jobs:
       # loss tolerance of two on an object that survives nothing.
       - name: guvenilmeyen manifest tam denetleniyor mu + kanarya
         run: |
-          bash ./scripts/check-untrusted-manifests-are-fully-validated.sh --self-test
-          bash ./scripts/check-untrusted-manifests-are-fully-validated.sh
-          bash ./scripts/check-evidence-provenance-is-checked.sh --self-test
-          bash ./scripts/check-evidence-provenance-is-checked.sh
-          bash ./scripts/check-every-opcode-has-a-forgery-test.sh --self-test
-          bash ./scripts/check-every-opcode-has-a-forgery-test.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- untrusted-manifests-are-fully-validated --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- untrusted-manifests-are-fully-validated
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- evidence-provenance-is-checked --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- evidence-provenance-is-checked
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- every-opcode-has-a-forgery-test --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- every-opcode-has-a-forgery-test
       # A self-derived id is a commitment to the fields it hashes and to
       # nothing else. `AiInferenceRequest.effort` was added to the struct and
       # to `calculate_id` in one change; had it landed in the struct alone,
@@ -1152,8 +1152,8 @@ jobs:
       # tier changes the id.
       - name: kendinden turetilen id her alani kapsiyor mu + kanarya
         run: |
-          bash ./scripts/check-self-derived-ids-cover-every-field.sh --self-test
-          bash ./scripts/check-self-derived-ids-cover-every-field.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- self-derived-ids-cover-every-field --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- self-derived-ids-cover-every-field
       # The id gate has a sibling hole. An id binds a field only to whoever
       # re-derives it; the signature is what every node checks first, and
       # `Transaction::signing_hash` builds its preimage by hand, so a field
@@ -1166,8 +1166,8 @@ jobs:
       # signature still verified.
       - name: telden gelen her alan imzalaniyor mu + kanarya
         run: |
-          bash ./scripts/check-wire-fields-are-signed.sh --self-test
-          bash ./scripts/check-wire-fields-are-signed.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- wire-fields-are-signed --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- wire-fields-are-signed
       # Four consensus digests appended a validator's key fields with nothing
       # between them. Concatenation without lengths is not injective: a
       # 96-byte BLS key plus a 48-byte PoP is byte-identical to a 144-byte BLS
@@ -1179,8 +1179,8 @@ jobs:
       # error naming the cause.
       - name: hash girdileri uzunluk onekli mi + kanarya
         run: |
-          bash ./scripts/check-hash-inputs-are-length-prefixed.sh --self-test
-          bash ./scripts/check-hash-inputs-are-length-prefixed.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- hash-inputs-length-prefixed --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- hash-inputs-length-prefixed
       # `settle_agent_payment_immediate` removed the payment from the live map
       # and then decided whether to accept it. One refusal put it back and the
       # other did not, so a second settle reported failure and consumed the
@@ -1191,8 +1191,8 @@ jobs:
       # to answer a challenge before the deadline took its bond.
       - name: reddetmeden once mutasyon var mi + kanarya
         run: |
-          bash ./scripts/check-refusals-do-not-mutate-first.sh --self-test
-          bash ./scripts/check-refusals-do-not-mutate-first.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- refusals-do-not-mutate-first --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- refusals-do-not-mutate-first
       # `node.rs` recovers from a poisoned PeerManager mutex in 76 places and
       # in four it did not: the /24 eclipse bound, the outbound-diversity
       # bound and both peer-count sites read `.lock()..unwrap_or(true)`, and
@@ -1201,8 +1201,8 @@ jobs:
       # operator fill the table from one subnet and surround the node.
       - name: kilit hatasi bir siniri acmasin + kanarya
         run: |
-          bash ./scripts/check-lock-failures-do-not-open-a-bound.sh --self-test
-          bash ./scripts/check-lock-failures-do-not-open-a-bound.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- lock-failures-do-not-open-a-bound --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- lock-failures-do-not-open-a-bound
       # `validate_transaction` required only `fee >= base_fee`, and `tx.amount`
       # reached pricing nowhere: it appeared in the overflow guard and the
       # balance check and nowhere else. Moving one base unit and moving a
@@ -1210,8 +1210,8 @@ jobs:
       # deal that charged the same for 1 KiB and 16 MiB.
       - name: deger transferleri degere gore mi fiyatlaniyor + kanarya
         run: |
-          bash ./scripts/check-value-transfers-are-priced-by-value.sh --self-test
-          bash ./scripts/check-value-transfers-are-priced-by-value.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- value-transfers-are-priced-by-value --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- value-transfers-are-priced-by-value
       # `cargo test --workspace` says every test that ran passed; it says
       # nothing about which tests exist. The forgery tests are the only
       # evidence the AIR constrains anything, and one deleted in a refactor
@@ -1222,8 +1222,8 @@ jobs:
       # the severe one.
       - name: forgery testleri isim-kilitli mi + kanarya
         run: |
-          bash ./scripts/check-forgery-tests-are-named.sh --self-test
-          bash ./scripts/check-forgery-tests-are-named.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- forgery-tests-are-named --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- forgery-tests-are-named
       # `src/storage/README.md` listed under maturity warnings that redundancy
       # was replication and there was no parity shard concept. By then
       # `ShardKind::Parity` existed, `ErasureScheme` was on the manifest and
@@ -1233,8 +1233,8 @@ jobs:
       # entry on it is true.
       - name: readme kodun sahip oldugunu inkar etmiyor mu + kanarya
         run: |
-          bash ./scripts/check-readme-does-not-deny-shipped-code.sh --self-test
-          bash ./scripts/check-readme-does-not-deny-shipped-code.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- readme-does-not-deny-shipped-code --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- readme-does-not-deny-shipped-code
       # Two storage rules with the same failure mode: the data exists, the
       # tests pass, and nothing on the operator's path reads it. An operator
       # that misses a challenge sits out six hours, and a mobile operator may
@@ -1243,14 +1243,14 @@ jobs:
       # paid replica, had tests, and was never called by anything.
       - name: depolama cezalari uygulaniyor mu + kanarya
         run: |
-          bash ./scripts/check-storage-penalties-are-enforced.sh --self-test
-          bash ./scripts/check-storage-penalties-are-enforced.sh
-          bash ./scripts/check-content-encryption-is-declared-and-bound.sh --self-test
-          bash ./scripts/check-content-encryption-is-declared-and-bound.sh
-          bash ./scripts/check-shard-placement-is-sticky-and-staked.sh --self-test
-          bash ./scripts/check-shard-placement-is-sticky-and-staked.sh
-          bash ./scripts/check-coding-audit-samples-the-relationship.sh --self-test
-          bash ./scripts/check-coding-audit-samples-the-relationship.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-penalties-are-enforced --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-penalties-are-enforced
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- content-encryption-bound --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- content-encryption-bound
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- shard-placement-is-sticky-and-staked --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- shard-placement-is-sticky-and-staked
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- coding-audit-samples-the-relationship --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- coding-audit-samples-the-relationship
       # The storage challenge verifier named three public inputs the AIR does
       # not produce for the program it names, so it rejected every proof
       # including a correct one, and the caller reads a rejection as a wrong
@@ -1261,8 +1261,8 @@ jobs:
       # fire on a rejection the chain cannot justify.
       - name: kanitlanamayan yol ceza kesmesin + kanarya
         run: |
-          bash ./scripts/check-uncheckable-proof-paths-do-not-slash.sh --self-test
-          bash ./scripts/check-uncheckable-proof-paths-do-not-slash.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- uncheckable-proof-paths-do-not-slash --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- uncheckable-proof-paths-do-not-slash
       # B35: the fixed-point slash expression was written out at five call
       # sites across two workspaces, and the narrowing was not spelled the same
       # way in all of them. `as u64` truncated where the Kani mirror panicked,
@@ -1270,8 +1270,8 @@ jobs:
       # instead of all of it.
       - name: slash ifadesi tek evde mi + kanarya
         run: |
-          bash ./scripts/check-slash-expression-has-one-home.sh --self-test
-          bash ./scripts/check-slash-expression-has-one-home.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- slash-expression-has-one-home --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- slash-expression-has-one-home
       # A gate that names its required tests by hand is only as good as those
       # names. Merging the hardening branches moved a `#[test]` attribute onto
       # the wrong function and silently un-tested
@@ -1279,16 +1279,16 @@ jobs:
       # check-economy-invariants.sh lists as required.
       - name: zorunlu testler gercekten test mi + kanarya
         run: |
-          bash ./scripts/check-required-tests-are-tests.sh --self-test
-          bash ./scripts/check-required-tests-are-tests.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- required-tests-are-tests --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- required-tests-are-tests
       # A HashMap folded into a root() hashes its entries in a per-process
       # random order, so two honest nodes disagree. Thorchain halted on exactly
       # this; determinism.yml compares digests across three OSes and cannot see
       # a per-process seed, so this reads the source instead.
       - name: konsensus map'leri sirali mi + kanarya
         run: |
-          bash ./scripts/check-consensus-maps-are-ordered.sh --self-test
-          bash ./scripts/check-consensus-maps-are-ordered.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- consensus-maps-are-ordered --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- consensus-maps-are-ordered
       # The Dockerfile said it had been moved to 1.94.0 and was still on
       # 1.97.1 - tag *and* digest, verified against the registry. Codegen
       # differs between releases, so the shipped container was outside the
@@ -1296,15 +1296,15 @@ jobs:
       # not copied into the build context either, so nothing corrected it.
       - name: docker toolchain pini + kanarya
         run: |
-          bash ./scripts/check-docker-toolchain-matches-pin.sh --self-test
-          bash ./scripts/check-docker-toolchain-matches-pin.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- docker-toolchain-matches-pin --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- docker-toolchain-matches-pin
       # The nextest step was named "(sha256 pinli)" and fetched the .sha256
       # from the same release as the tarball. Whoever can replace one can
       # replace the other, so it verified transit and not provenance.
       - name: indirme pinleri gercekten pin mi + kanarya
         run: |
-          bash ./scripts/check-pinned-downloads-are-really-pinned.sh --self-test
-          bash ./scripts/check-pinned-downloads-are-really-pinned.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- pinned-downloads-are-really-pinned --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- pinned-downloads-are-really-pinned
       # Bir git bagimliliginin surum alani, o commit'te manifest ne diyorsa
       # odur ve kod degisince kimildamaz. Pinli rust-libp2p agacinda ucu ucuna
       # uc commit de `libp2p-gossipsub 0.50.0` der: 8541b83b'de backoff.rs'te
@@ -1318,16 +1318,16 @@ jobs:
       # zorlamak.
       - name: git bagimliliklari commit bazinda denetlendi mi + kanarya
         run: |
-          bash ./scripts/check-git-deps-are-audited-by-commit.sh --self-test
-          bash ./scripts/check-git-deps-are-audited-by-commit.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- git-deps-are-audited-by-commit --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- git-deps-are-audited-by-commit
       # A test name is the claim a reader trusts when counting coverage.
       # `pow_empty_block_rejected_by_validation` asserted is_some();
       # `pos_double_producer_address_rejected` asserted both blocks succeed;
       # the four qcblob_quorum tests never called import_qc_blob at all.
       - name: reddi iddia eden testler reddi assert ediyor mu + kanarya
         run: |
-          bash ./scripts/check-rejection-tests-assert-rejection.sh --self-test
-          bash ./scripts/check-rejection-tests-assert-rejection.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- rejection-tests-assert-rejection --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- rejection-tests-assert-rejection
       # A .rs file no `mod` declares is never read by rustc: not linted, not
       # covered, not tested -- while reading like live code in grep and in
       # review. proto_bridge.rs sat there duplicating proto_conversions.rs,
@@ -1335,8 +1335,8 @@ jobs:
       # (row_slice vs current_slice) without anything noticing.
       - name: yetim kaynak dosya var mi + kanarya
         run: |
-          bash ./scripts/check-no-orphan-source-files.sh --self-test
-          bash ./scripts/check-no-orphan-source-files.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- no-orphan-source-files --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- no-orphan-source-files
       # Containment-first: a gate that is off by default must stay off, and the
       # path that reaches it must consult it. bud-vm hard-coded
       # MainnetActivation::full() while ContractCall passed mainnet=false, so
@@ -1344,8 +1344,8 @@ jobs:
       # them.
       - name: containment varsayilanlari + kanarya
         run: |
-          bash ./scripts/check-containment-defaults.sh --self-test
-          bash ./scripts/check-containment-defaults.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- containment-defaults --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- containment-defaults
       - name: buf v1.71.0 kur (sha256 pinli)
         run: |
           set -euo pipefail

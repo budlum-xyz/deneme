@@ -45,15 +45,14 @@ jobs:
       - name: cargo-udeps kur (locked; crate.io sürümü log'da kanıtlı)
         run: cargo +nightly install cargo-udeps --locked
       - name: Kanarya (vacuous-gate koruması)
-        run: bash ./scripts/check-udeps.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- udeps --self-test
       - name: "Ölçüm + kapı (ratchet: baseline dışı bulgu = FAIL)"
         run: |
-          ROOT="$PWD"
           cargo +nightly udeps --all-targets 2>&1 | tee /tmp/udeps1.txt || true
-          bash "$ROOT/scripts/check-udeps.sh" /tmp/udeps1.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- udeps /tmp/udeps1.txt
           cd budzero
           cargo +nightly udeps --all-targets 2>&1 | tee /tmp/udeps2.txt || true
-          bash "$ROOT/scripts/check-udeps.sh" /tmp/udeps2.txt
+          cargo run --release --manifest-path ../xtask/gates/Cargo.toml -- udeps /tmp/udeps2.txt
 
   geiger:
     name: "Geiger: unsafe görünürlük (first-party 0 kanıt katmanı)"
@@ -75,12 +74,11 @@ jobs:
       - name: cargo-geiger kur (locked; crate.io sürümü log'da kanıtlı)
         run: cargo install cargo-geiger --locked
       - name: Kanarya (vacuous-gate koruması)
-        run: bash ./scripts/check-geiger.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- geiger --self-test
       - name: Ölçüm + first-party kapısı (budlum + budzero)
         run: |
-          ROOT="$PWD"
           cargo geiger --all-targets 2>&1 | tee /tmp/geiger1.txt || true
-          bash "$ROOT/scripts/check-geiger.sh" /tmp/geiger1.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- geiger /tmp/geiger1.txt
           cd budzero
           cargo geiger --all-targets 2>&1 | tee /tmp/geiger2.txt || true
-          bash "$ROOT/scripts/check-geiger.sh" /tmp/geiger2.txt
+          cargo run --release --manifest-path ../xtask/gates/Cargo.toml -- geiger /tmp/geiger2.txt

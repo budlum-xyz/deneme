@@ -449,9 +449,12 @@ fn collect_rs(root: &Path, out: &mut Vec<PathBuf>) {
         return;
     };
     for e in entries.flatten() {
+        let Ok(p_kind) = e.file_type() else {
+            continue;
+        };
         let p = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        if p.is_dir() {
+        if p_kind.is_dir() {
             if matches!(name.as_str(), ".git" | "target" | "node_modules") {
                 continue;
             }

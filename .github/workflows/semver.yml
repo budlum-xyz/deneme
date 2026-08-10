@@ -24,7 +24,7 @@ jobs:
     #   * Base = PR'da `pull_request.base.sha`, main push'ta `push.before`.
     #   * İki ayrı checkout (current/baseline) + `--baseline-root`.
     #   * nightly toolchain (cargo-semver-checks rustdoc-json üretimi için).
-    #   * Gate: `scripts/check-semver.sh` - kırılma varsa ve
+    #   * Gate: `semver` (Rust, xtask/gates) - kırılma varsa ve
     #     `.github/semver-exceptions.txt` boşsa FAIL. İstisna satırları
     #     Kullanıcı onaylı, gerekçeli "kanıtlı skip-list" desenindedir
     #     (.quality/deny.toml [advisories] ile aynı disiplin).
@@ -72,7 +72,7 @@ jobs:
       - name: cargo-semver-checks kur (locked)
         run: cargo +1.94.0 install cargo-semver-checks --locked
       - name: Gate canary (vacuous-gate koruması)
-        run: bash ./current/scripts/check-semver.sh --self-test
+        run: BUDLUM_ROOT="$PWD/current" cargo run --release --manifest-path ./current/xtask/gates/Cargo.toml -- semver --self-test
       - name: Teşhis (kalıcı kanıt adımı) - doğrudan rustdoc-json
         # Gelecekteki sessiz-crash sınıflarında wrapper'ın yuttuğu hata gövdesini
         # Ham olarak görünür kılar (continue-on-error: koşuyu bloklamaz).
@@ -95,7 +95,7 @@ jobs:
           SEMVER_BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
           # Kök-neden (kapandı, 2026-07-21): rustdoc-json ölümü nightly'den
           # Değil --all-features heuristiğinden kaynaklanıyordu - pq-dilithium+
-          # Pq-ml-dsa compile_error! kilidi. Fix: check-semver.sh --default-features.
+          # Pq-ml-dsa compile_error! kilidi. Fix: semver kapısı --default-features ile koşar.
           # Nightly pin rustdoc-json'un -Z gereksinimi için zorunlu kalıyor.
           RUSTUP_TOOLCHAIN: nightly-2026-07-19
           CARGO_BUILD_JOBS: "2"
@@ -107,7 +107,7 @@ jobs:
             echo "NOT: budlum-core crates.io'da yayınlı değil; base mecburidir."
             exit 0
           fi
-          bash ./current/scripts/check-semver.sh ./current ./baseline
+          BUDLUM_ROOT="$PWD/current" cargo run --release --manifest-path ./current/xtask/gates/Cargo.toml -- semver ./current ./baseline
           rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::warning::gate exit=$rc - runner memory snapshot (OOM kanıtı için):"

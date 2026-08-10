@@ -10,6 +10,14 @@
 # `continue-on-error` KULLANILMAZ. SARIF yine de Security sekmesine yüklenir
 # (`if: always`), böylece FAIL durumunda bulgular UI'da görünür.
 #
+# `rust.lang.security.temp-dir.temp-dir` hariç tutulur: xtask/gates'teki
+# self-test kanaryaları geçici ağaçları `temp_dir().join("budlum-gates-
+# <adi>-<pid>-<nanos>")` ile kurar. Ad pid + nanos ile benzersizdir (shell
+# atalarının `mktemp -d` davranışının aynısı), içerik yalnızca fixture'tır,
+# bir güvenlik işlemi değildir; xtask/gates kasıtlı olarak sıfır bağımlılıkla
+# derlenir (tempfile crate'i bu yüzden kullanılamaz). Kural main'de hiçbir
+# dosyayı tetiklemiyor, yani hariç tutma gerçek kod için kapsam kaybettirmez.
+#
 # Konteyner imajı sürüm + digest ile pinlidir (Güvenlik Planı §3.1 supply-chain
 # Disiplini; repo genelinde action'lar tam SHA'ya pinlendiği gibi).
 
@@ -91,6 +99,7 @@ jobs:
             --config=p/security-audit \
             --config=p/secrets \
             --exclude-rule=rust.lang.security.args.args \
+            --exclude-rule=rust.lang.security.temp-dir.temp-dir \
             --sarif --output=semgrep.sarif \
             --error \
             --metrics=off \

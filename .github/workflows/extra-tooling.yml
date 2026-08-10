@@ -362,15 +362,16 @@ jobs:
         with:
           persist-credentials: false
 
-      # Kapının kendisi Kani kurulmadan önce kanıtlanır: kanarya sahte çıktıyla
-      # çalışır, yani kurulum bozulsa bile "kapı vacuous mu" sorusu cevaplanır.
-      - name: Kapı kanaryası (Kani'den bağımsız)
-        run: bash ./scripts/check-kani.sh --self-test
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-07-16
         with:
           toolchain: "1.94.0"
+
+      # Kapının kendisi Kani kurulmadan önce kanıtlanır: kanarya sahte çıktıyla
+      # çalışır, yani kurulum bozulsa bile "kapı vacuous mu" sorusu cevaplanır.
+      # Rust sürümü kapı olduğu için kanarya Rust kurulumundan sonra koşar.
+      - name: Kapı kanaryası (Kani'den bağımsız)
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- kani --self-test
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: budlum-core
@@ -398,12 +399,12 @@ jobs:
       # `--exact` olmadan `--harness` bir alt-dize filtresidir. Buradaki
       # isimler benzersiz oldugu icin ayni dokuzu secer, ve daha onemlisi
       # eslesme SAYISI kapi tarafindan dogrulanir: dokuz beklenip sekiz
-      # kosarsa `check-kani.sh` bunu yakalar. Filtre gevsedi, kapi gevsemedi.
+      # kosarsa `kani` kapısı bunu yakalar. Filtre gevsedi, kapi gevsemedi.
       - name: Kani proofs (hizli set)
         working-directory: kani
         run: |
           set -euo pipefail
-          mapfile -t fast < <(bash ../scripts/check-kani.sh --fast-names)
+          mapfile -t fast < <(cargo run --release --manifest-path ../xtask/gates/Cargo.toml -- kani --fast-names)
           [ "${#fast[@]}" -gt 0 ] || { echo "no fast harnesses found; the gate would be vacuous" >&2; exit 1; }
           args=()
           for h in "${fast[@]}"; do
@@ -413,7 +414,7 @@ jobs:
           cargo kani "${args[@]}" --output-format terse 2>&1 | tee /tmp/kani.log
 
       - name: Kani kapısı
-        run: bash ./scripts/check-kani.sh /tmp/kani.log
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- kani /tmp/kani.log
 
   # Olculen gercek: bu uc harness `penalty_for`'u iki kez cagirip sonuclari
   # iliskilendiriyor ve bir cozucu iki bagimsiz 128-bit sembolik carpimi CI
@@ -457,7 +458,7 @@ jobs:
         working-directory: kani
         run: |
           set -uo pipefail
-          mapfile -t slow < <(bash ../scripts/check-kani.sh --slow-names)
+          mapfile -t slow < <(cargo run --release --manifest-path ../xtask/gates/Cargo.toml -- kani --slow-names)
           [ "${#slow[@]}" -gt 0 ] || { echo "no slow harnesses; nothing to measure" >&2; exit 1; }
           {
             echo "| harness | result | seconds |"

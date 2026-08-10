@@ -29,82 +29,7 @@ use std::path::Path;
 /// Sorted, one per line, so a diff on this file reads as exactly which gate
 /// was ported. Nothing may be added. Removing an entry means the gate now
 /// lives in `xtask/gates` and the script is gone from the tree.
-const SHELL_GATES_AT_MIGRATION_START: &[&str] = &[
-    "check-a-derivation-cannot-outlive-its-master.sh",
-    "check-accumulators-pin-their-first-row.sh",
-    "check-actionlint.sh",
-    "check-air-selectors-are-opcode-bound.sh",
-    "check-badges-are-current.sh",
-    "check-binding-claims-match-reality.sh",
-    "check-bit-decompositions-are-canonical.sh",
-    "check-bns-gate.sh",
-    "check-bud-e2e.sh",
-    "check-capability-modules-are-wired.sh",
-    "check-cargo-vet.sh",
-    "check-clippy-extra.sh",
-    "check-coding-audit-samples-the-relationship.sh",
-    "check-consensus-maps-are-ordered.sh",
-    "check-containment-defaults.sh",
-    "check-content-encryption-is-declared-and-bound.sh",
-    "check-coverage.sh",
-    "check-cross-table-checks-use-last-row.sh",
-    "check-derived-content-stays-byte-exact.sh",
-    "check-docker-toolchain-matches-pin.sh",
-    "check-domain-tags.sh",
-    "check-economy-invariants.sh",
-    "check-every-opcode-has-a-forgery-test.sh",
-    "check-evidence-provenance-is-checked.sh",
-    "check-forgery-tests-are-named.sh",
-    "check-fork-choice-gate.sh",
-    "check-fuzz-targets-are-wired.sh",
-    "check-gates-are-wired.sh",
-    "check-gating-flags-are-pinned.sh",
-    "check-geiger.sh",
-    "check-generated-content-is-verifiable.sh",
-    "check-git-deps-are-audited-by-commit.sh",
-    "check-governance-invariants.sh",
-    "check-guards-are-reachable.sh",
-    "check-hash-inputs-are-length-prefixed.sh",
-    "check-kani.sh",
-    "check-lock-failures-do-not-open-a-bound.sh",
-    "check-logup-multipliers-are-boolean.sh",
-    "check-lubot-reads-but-does-not-generate.sh",
-    "check-network-hardening-gate.sh",
-    "check-no-conflict-markers-are-committed.sh",
-    "check-no-orphan-source-files.sh",
-    "check-no-unicode-dashes.sh",
-    "check-node-classification-gate.sh",
-    "check-paid-content-cannot-be-read-for-free.sh",
-    "check-pinned-downloads-are-really-pinned.sh",
-    "check-poa-compliance-gate.sh",
-    "check-readme-does-not-deny-shipped-code.sh",
-    "check-reduction-claims-state-both-units.sh",
-    "check-refusals-do-not-mutate-first.sh",
-    "check-rejection-tests-assert-rejection.sh",
-    "check-repair-fires-on-loss.sh",
-    "check-required-tests-are-tests.sh",
-    "check-security-parameters-are-derived.sh",
-    "check-self-derived-ids-cover-every-field.sh",
-    "check-semver.sh",
-    "check-shard-placement-is-sticky-and-staked.sh",
-    "check-slash-expression-has-one-home.sh",
-    "check-source-reading-tests-are-narrowed.sh",
-    "check-storage-is-priced-by-size.sh",
-    "check-storage-penalties-are-enforced.sh",
-    "check-storage-proof-production-boundary.sh",
-    "check-storage-provider-gate.sh",
-    "check-threshold-rates-share-one-scale.sh",
-    "check-timing-safe.sh",
-    "check-udeps.sh",
-    "check-uncheckable-proof-paths-do-not-slash.sh",
-    "check-untrusted-manifests-are-fully-validated.sh",
-    "check-value-transfers-are-priced-by-value.sh",
-    "check-wallet-core-gate.sh",
-    "check-wire-fields-are-signed.sh",
-    "check-zero-storage-bytes-are-frozen.sh",
-    "check-zero-tests-use-an-inverse-witness.sh",
-    "check-zizmor.sh",
-];
+const SHELL_GATES_AT_MIGRATION_START: &[&str] = &[];
 
 /// Read the shell gates actually present in the tree.
 fn present(root: &Path) -> Result<BTreeSet<String>, String> {
@@ -156,9 +81,15 @@ fn judge(found: &BTreeSet<String>, allowed: &BTreeSet<String>) -> Result<String,
     let remaining = found.len();
     let done = ported.len();
     if done == 0 {
+        if remaining == 0 {
+            return Ok(String::from(
+                "Shell gate inventory OK: 0 scripts, migration complete. \
+                 Every gate lives in xtask/gates.",
+            ));
+        }
         return Ok(format!(
             "Shell gate inventory OK: {remaining} scripts, none added. \
-             The list only shrinks, and nothing has come off it yet."
+             The list only shrinks."
         ));
     }
     Ok(format!(
@@ -169,20 +100,22 @@ fn judge(found: &BTreeSet<String>, allowed: &BTreeSet<String>) -> Result<String,
 
 /// # Errors
 ///
-/// Returns a finding when a shell gate exists that is not on the list.
+/// Returns a finding when a shell gate exists that is not on the list, or
+/// when the scripts directory is empty while the list still names gates to
+/// port (the directory moved, or the gates were deleted rather than ported).
 pub fn run(root: &Path) -> Result<String, String> {
     let found = present(root)?;
-    if found.is_empty() {
-        return Err(String::from(
-            "scripts/ contains no check-*.sh at all. The migration list expects some \
-             to remain, so either the directory moved or the gates were deleted \
-             rather than ported, and this check is now watching nothing.",
-        ));
-    }
     let allowed: BTreeSet<String> = SHELL_GATES_AT_MIGRATION_START
         .iter()
         .map(|s| (*s).to_string())
         .collect();
+    if found.is_empty() && !allowed.is_empty() {
+        return Err(String::from(
+            "scripts/ contains no check-*.sh at all, but the migration list still \
+             names gates to remove. Either the directory moved or the gates were \
+             deleted rather than ported, and this check is now watching nothing.",
+        ));
+    }
     judge(&found, &allowed)
 }
 
@@ -201,6 +134,22 @@ pub fn self_test() -> Result<String, String> {
     let same: BTreeSet<String> = allowed.clone();
     if let Err(e) = judge(&same, &allowed) {
         problems.push(format!("BROKEN: an unchanged inventory was rejected: {e}"));
+    }
+
+    // The end state of the migration - an empty list and an empty scripts
+    // directory - passes and says the migration is complete.
+    let empty: BTreeSet<String> = BTreeSet::new();
+    match judge(&empty, &empty) {
+        Ok(msg) => {
+            if !msg.contains("migration complete") {
+                problems.push(format!(
+                    "BROKEN: an empty inventory was not reported as complete: {msg}"
+                ));
+            }
+        }
+        Err(e) => problems.push(format!(
+            "BROKEN: an empty inventory after the migration was rejected: {e}"
+        )),
     }
 
     // A new shell gate is refused.

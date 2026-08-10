@@ -72,10 +72,10 @@ jobs:
       # Okuyor, yoksa her koşuda sessizce 0 mı dönüyor? Kanarya sentetik
       # Çıktılarla parse'ı doğrular; bozuksa job burada kırılır.
       - name: Kanarya - ratchet sayacının çalıştığının kanıtı
-        run: bash ./scripts/check-cargo-vet.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- cargo-vet --self-test
 
       - name: Ratchet kapısı (denetimsiz bağımlılık sayısı artamaz)
-        run: bash ./scripts/check-cargo-vet.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- cargo-vet
 
       # Bilgilendirici: denetim borcunu hangi crate'lerin taşıdığını PR
       # Özetinde görünür kılar, böylece borç eritme hedefli yapılabilir.

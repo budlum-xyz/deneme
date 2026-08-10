@@ -235,8 +235,11 @@ fn stray_workflow_dirs(root: &Path) -> Vec<String> {
             return;
         };
         for e in entries.flatten() {
+            let Ok(p_kind) = e.file_type() else {
+                continue;
+            };
             let p = e.path();
-            if !p.is_dir() {
+            if !p_kind.is_dir() {
                 continue;
             }
             let name = e.file_name();
