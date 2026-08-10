@@ -255,10 +255,25 @@ fn judge(src: &str) -> Vec<String> {
             let empty_body = body.trim_end().ends_with('{')
                 || body.trim().ends_with("{ //")
                 || body.trim().ends_with("{ /*");
-            body.contains("return true;")
-                && !after.contains("return true;")
-                && !closure_ret
-                && !empty_body
+            // `return true` must be at the guard's top level (nested_depth
+            // <= 1: the guard's own if). A return nested deeper (closure or
+            // move-closure body) is a decoy (Strix CWE-697, round 9).
+            let mut nested_depth = 0i32;
+            let mut top_level_return = false;
+            let mut nested_return = false;
+            for line in body.lines() {
+                let trimmed = line.trim();
+                if nested_depth <= 1 && trimmed.contains("return true;") {
+                    top_level_return = true;
+                }
+                if nested_depth > 1 && trimmed.contains("return true;") {
+                    nested_return = true;
+                }
+                nested_depth = nested_depth
+                    .saturating_add(trimmed.matches('{').count().try_into().unwrap_or(i32::MAX))
+                    .saturating_sub(trimmed.matches('}').count().try_into().unwrap_or(i32::MAX));
+            }
+            top_level_return && !nested_return && !closure_ret && !empty_body
         })
     });
     // tail_form: the digest comparison must be the closure's last expression,

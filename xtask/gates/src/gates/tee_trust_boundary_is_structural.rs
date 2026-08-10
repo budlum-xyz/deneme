@@ -235,11 +235,9 @@ fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
                                             // the guard itself is an if.
                                             let has_err = guard_body.contains("return Err(")
                                                 || guard_body.contains("return Err (");
-                                            let closure_decoy = guard_body.contains("= ||")
-                                                || guard_body.contains("= |")
-                                                || guard_body.contains("fn ")
-                                                || guard_body.contains("| record |")
-                                                || guard_body.contains("|r|");
+                                            let closure_decoy = guard_body.contains("||")
+                                                || guard_body.contains("| ")
+                                                || guard_body.contains("fn ");
                                             guarded = has_err && !closure_decoy;
                                             break;
                                         }
