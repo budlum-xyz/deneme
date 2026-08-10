@@ -139,6 +139,11 @@ fn collect(root: &Path) -> Result<String, String> {
 /// finding).
 fn ok_success_in(text: &str) -> bool {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    // A unit-Ok used as a collection item (`vec![Ok(())]`, `[Ok(())]`) is not
+    // a control-flow success (Strix CWE-697, round 10 finding: nested-item).
+    if compact.contains("![Ok(())") || compact.contains("[Ok(()),") {
+        return false;
+    }
     compact.contains("Ok(())")
         || compact.contains("::Ok(())")
         || (compact.contains("Ok::<") && compact.contains(">(())"))

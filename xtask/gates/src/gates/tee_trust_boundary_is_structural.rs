@@ -238,7 +238,21 @@ fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
                                             let closure_decoy = guard_body.contains("||")
                                                 || guard_body.contains("| ")
                                                 || guard_body.contains("fn ");
-                                            guarded = has_err && !closure_decoy;
+                                            // A `return Err` nested inside a
+                                            // conditional (`if .. { return Err(..); }`)
+                                            // that is itself inside the guard is a
+                                            // decoy if a success path remains; require
+                                            // the FIRST `return Err` to appear before
+                                            // any nested `if` opener (Strix CWE-697,
+                                            // round 10 finding: nested conditional).
+                                            let first_err = guard_body.find("return Err");
+                                            let first_if = guard_body.find("if ");
+                                            let nested_conditional = match (first_err, first_if) {
+                                                (Some(e), Some(f)) => f < e,
+                                                _ => false,
+                                            };
+                                            guarded =
+                                                has_err && !closure_decoy && !nested_conditional;
                                             break;
                                         }
                                     }
