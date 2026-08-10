@@ -248,7 +248,10 @@ fn judge(src: &str) -> Vec<String> {
         guard_end.is_some_and(|end| {
             let body = &guard_rest[..end];
             let after = &guard_rest[end..];
-            let closure_ret = body.contains("= ||") || body.contains("= |");
+            let closure_ret = body.contains("= ||")
+                || body.contains("= |")
+                || body.contains("move |")
+                || body.contains("|_|");
             let empty_body = body.trim_end().ends_with('{')
                 || body.trim().ends_with("{ //")
                 || body.trim().ends_with("{ /*");
