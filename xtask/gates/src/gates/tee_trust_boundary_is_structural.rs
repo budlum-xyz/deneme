@@ -206,15 +206,25 @@ fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
                         Some(open) => {
                             let mut depth = 0usize;
                             let mut guarded = false;
+                            let mut line_start = open + 1;
                             for (idx, ch) in guard[open..].char_indices() {
                                 match ch {
-                                    '{' => depth += 1,
+                                    '{' => {
+                                        depth += 1;
+                                        line_start = open + idx + 1;
+                                    }
                                     '}' => {
                                         depth = depth.saturating_sub(1);
                                         if depth == 0 {
-                                            let guard_body = &guard[open + 1..=open + idx];
+                                            // The guard body (from after the
+                                            // `{` to before the `}`) must
+                                            // contain a top-level return Err,
+                                            // not one nested in an inner if
+                                            // with a fall-through success.
+                                            let guard_body = &guard[open + 1..open + idx];
                                             guarded = guard_body.contains("return Err(")
                                                 || guard_body.contains("return Err (");
+                                            let _ = line_start;
                                             break;
                                         }
                                     }

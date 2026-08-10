@@ -215,21 +215,46 @@ fn judge(src: &str) -> Vec<String> {
     // binding).
     // The digest comparison must drive the success. Two legitimate forms:
     //   1. `if sha2::Sha256::digest(..) == evidence_hash { return true; }`
-    //      (explicit guarded success), or
+    //      with a NON-INERT body (the guard body must actually return true),
+    //      or
     //   2. `sha2::Sha256::digest(..) == evidence_hash` as a tail expression
     //      (the closure's result, as in `any(|r| { ..; digest == hash })`).
-    // A comparison bound to an unused variable is cosmetic (Strix CWE-697,
-    // round 5 finding: cosmetic digest guards).
+    // A comparison bound to an unused variable, or an `if` whose body does
+    // not contain the success, is cosmetic (Strix CWE-697, round 5 finding:
+    // inert `if` bodies).
+    let digest_cmp = "sha2::Sha256::digest(&bytes).as_slice() == evidence_hash";
     let guarded_form = block
-        .find("if sha2::Sha256::digest(&bytes).as_slice() == evidence_hash {")
-        .is_some();
-    let tail_form = block.contains("sha2::Sha256::digest(&bytes).as_slice() == evidence_hash")
+        .find(&format!("if {digest_cmp} {{"))
+        .is_some_and(|if_start| {
+            let if_rest = &block[if_start..];
+            let open = if_rest.find('{').unwrap_or(0);
+            let mut depth = 0i32;
+            let mut if_end = None;
+            for (offset, ch) in if_rest[open..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            if_end = Some(open + offset + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if_end.is_some_and(|end| {
+                let body = &if_rest[..end];
+                body.contains("return true;") && !if_rest[end..].contains("return true;")
+            })
+        });
+    let tail_form = block.contains(digest_cmp)
         && !block
             .lines()
             .any(|l| l.contains("let ") && l.contains("== evidence_hash"));
     if !guarded_form && !tail_form {
         problems.push(String::from(
-            "account.rs no longer drives the slash success with the digest comparison. The evidence check must either guard the success (`if digest == evidence_hash { return true; }`) or be the closure's tail expression; a cosmetic binding is insufficient.",
+            "account.rs no longer drives the slash success with the digest comparison. The evidence check must either guard the success with a non-inert body (`if digest == evidence_hash { return true; }`) or be the closure's tail expression; a cosmetic binding or inert if body is insufficient.",
         ));
     }
 
