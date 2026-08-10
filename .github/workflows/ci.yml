@@ -779,7 +779,7 @@ jobs:
             --report-format sarif --report-path gitleaks.sarif --exit-code 0
       - name: gitleaks SARIF yükle (Security sekmesi)
         if: always()
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@d1ba80a13dd99fba24a470575428917156a28b43 # v4.37.5
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -858,7 +858,7 @@ jobs:
           ignore-unfixed: true
       - name: Trivy SARIF yukle (Security sekmesi)
         if: always()
-        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        uses: github/codeql-action/upload-sarif@d1ba80a13dd99fba24a470575428917156a28b43 # v4.37.5
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
