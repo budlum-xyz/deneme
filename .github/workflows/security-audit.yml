@@ -381,4 +381,10 @@ jobs:
         with:
           results_file: scorecard.sarif
           results_format: sarif
-          publish_results: true
+          # publish_results signs the result with a Sigstore Fulcio cert. In CI
+          # the OAuth device flow cannot be completed by a human, so the token
+          # expires and the job fails with `expired_token` even though the
+          # score itself was computed. This job is deliberately informational
+          # (see the header comment): keep the SARIF upload, skip the
+          # signed-publication step that cannot run unattended.
+          publish_results: false

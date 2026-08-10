@@ -57,8 +57,17 @@ scan() {
         *curl*|*wget*) ;;
         *) continue ;;
       esac
-      # A remote checksum file being fetched.
-      if printf '%s' "$line" | grep -qE 'https?://[^[:space:]]+\.(sha256|sha512|sha1|md5|checksum|checksums)([[:space:]]|$|\\)'; then
+      # A remote checksum file being fetched. A checksum URL is any URL whose
+      # path ends in a checksum extension OR names a checksum-ish resource
+      # (`/hash`, `/checksum`, `/sum`) regardless of extension, so an
+      # attacker-controlled checksum fetched from an arbitrary path such as
+      # `/releases/latest/hash` is caught too, and the extension match is
+      # case-insensitive so `SHA256`/`.SHA512` variants are caught as well
+      # (Strix MEDIUM, CWE-184, deneme round 3 PR #272; uppercase
+      # extensions: PR #149 follow-up).
+      if printf '%s' "$line" | grep -qiE 'https?://[^[:space:]]+\.(sha256|sha512|sha1|md5|checksum|checksums)([[:space:]]|$|\\)' \
+        || printf '%s' "$line" | grep -qiE 'https?://[^[:space:]]*/(hash|checksum|checksums|sums?)([[:space:]]|$|\\)' \
+        || printf '%s' "$line" | grep -qiE 'https?://[^[:space:]]*[?&](hash|checksum|checksums|sums?)[=]'; then
         offenders+=("$(basename "$f"):$n")
       fi
     done < "$f"
@@ -127,6 +136,30 @@ self_test() {
     exit 1
   fi
 
+  # 2b. An uppercase extension (.SHA256) must fail too: the extension match
+  #     is case-insensitive (Strix MEDIUM, CWE-184, PR #149 follow-up).
+  mk "$tmp/upper" \
+    '        run: |' \
+    '          curl -sSfLO https://example.com/tool.tar.gz' \
+    '          curl -sSfLO https://example.com/tool.SHA256' \
+    '          sha256sum -c tool.SHA256'
+  if ( scan "$tmp/upper" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a fetched .SHA256 checksum was accepted!" >&2
+    exit 1
+  fi
+
+  # 2c. A checksum URL carrying a query string must fail too: `?checksum=` or
+  #     `&hash=` in the URL is still a remote checksum fetch (Strix MEDIUM,
+  #     CWE-184, PR #149 follow-up).
+  mk "$tmp/query" \
+    '        run: |' \
+    '          curl -sSfL "https://example.com/download?checksum=abc" -o tool.tar.gz' \
+    '          curl -sSfL "https://example.com/tool?hash=def" -o tool2.tar.gz'
+  if ( scan "$tmp/query" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a query-string checksum URL was accepted!" >&2
+    exit 1
+  fi
+
   # 3. A tree where nothing verifies anything must fail rather than pass by
   #    having no offenders.
   mk "$tmp/noverify" \
@@ -167,7 +200,7 @@ self_test() {
     exit 1
   fi
 
-  echo "pinned-download gate self-test OK: fetched checksums (curl and wget), a tree that verifies nothing and a missing workflow directory are all rejected; a checked-in hash passes and a commented URL is ignored."
+  echo "pinned-download gate self-test OK: fetched checksums (curl, wget, an uppercase .SHA256 and a query-string checksum URL), a tree that verifies nothing and a missing workflow directory are all rejected; a checked-in hash passes and a commented URL is ignored."
 }
 
 if [ "${1:-}" = "--self-test" ]; then

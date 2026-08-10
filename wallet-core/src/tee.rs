@@ -4,6 +4,22 @@
 //! This module defines the wallet-facing contract and a **fail-closed**
 //! Default: if the user opts into TEE, plaintext signing/transfer paths
 //! Must not silently proceed without an enclave backend.
+//!
+//! Trust boundary (Strix MEDIUM, CWE-347, PR #149 follow-up): the runtime
+//! that runs in the enclave must not also be the thing that proves it ran in
+//! an enclave. A self-attesting software runtime can echo any report data and
+//! any measurement it likes, so comparing fields on an object the runtime
+//! itself produced enforces nothing. The split is therefore:
+//!
+//!   * [`TeeQuoter`] produces a **raw hardware quote** (bytes) bound to a
+//!     report_data. It never produces parsed attestation fields.
+//!   * [`TeeQuoteVerifier`] verifies that quote against the hardware root of
+//!     trust (Intel/AMD attestation root) and only then parses the trusted
+//!     fields out of it. The wallet owns the verifier; the runtime never sees
+//!     it.
+//!
+//! Production builds plug in a real quote source (SGX/Nitro adapter) and a
+//! real root-of-trust verifier. The defaults are unavailable (fail-closed).
 
 use crate::WalletError;
 
@@ -46,6 +62,25 @@ pub trait TeeRuntime: Send + Sync {
     }
 }
 
+/// Quote source: the enclave side. Returns a **raw hardware quote** binding
+/// `report_data` to the enclave measurement. It must not return parsed
+/// attestation fields: the wallet only trusts fields the verifier extracts
+/// from a quote it validated against the hardware root of trust.
+pub trait TeeQuoter: TeeRuntime {
+    /// Produce a raw attestation quote over `report_data`.
+    fn quote(&self, report_data: [u8; 32]) -> Result<Vec<u8>, WalletError>;
+}
+
+/// Quote verifier: the wallet side, owned by the wallet. Validates a raw
+/// quote against the hardware root of trust (SGX EPID/DCAP or Nitro root
+/// certificate chain) and only then returns the trusted fields. A runtime can
+/// never influence the fields returned here, so a self-attesting software
+/// runtime cannot fabricate an attestation.
+pub trait TeeQuoteVerifier: Send + Sync {
+    /// Verify `quote` cryptographically and extract the trusted fields.
+    fn verify_quote(&self, quote: &[u8]) -> Result<TeeAttestation, WalletError>;
+}
+
 /// Default runtime: always unavailable. Used until a real enclave is wired.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UnavailableTeeRuntime {
@@ -74,23 +109,51 @@ impl TeeRuntime for UnavailableTeeRuntime {
     }
 }
 
-// ── (2026-07-23): TEE SDK extension - attestation + mock runtime ──
-//
-// Production: UnavailableTeeRuntime (fail-closed) remains the default.
-// Testing: MockTeeRuntime provides deterministic seal/attest for CI.
-// Future: Real SGX/Nitro adapters implement TeeRuntime + TeeAttester.
+impl TeeQuoter for UnavailableTeeRuntime {
+    fn quote(&self, _report_data: [u8; 32]) -> Result<Vec<u8>, WalletError> {
+        // No enclave is linked, so no quote can ever be produced.
+        // `sign_with_privacy` therefore stays fail-closed under
+        // tee_enabled=true (Strix HIGH, deneme round 3 PR #244).
+        Err(WalletError::TeeUnavailable(
+            "TEE backend is not linked in this build; no quote available".into(),
+        ))
+    }
+}
 
-/// TEE attestation report - binds enclave measurement to runtime data.
-/// Production attestations are signed by the enclave hardware root of trust.
+/// Default quote verifier: no hardware root is linked, so no quote can ever
+/// verify. `sign_with_privacy` stays fail-closed even if a runtime somehow
+/// produced bytes claiming to be a quote (Strix MEDIUM, CWE-347).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UnavailableTeeQuoteVerifier;
+
+impl TeeQuoteVerifier for UnavailableTeeQuoteVerifier {
+    fn verify_quote(&self, _quote: &[u8]) -> Result<TeeAttestation, WalletError> {
+        Err(WalletError::TeeUnavailable(
+            "no hardware attestation root is linked in this build; quotes cannot be verified"
+                .into(),
+        ))
+    }
+}
+
+// ── (2026-07-23): TEE SDK extension - quote + verifier + mock runtime ──
+//
+// Production: UnavailableTeeRuntime + UnavailableTeeQuoteVerifier (both
+// fail-closed) remain the default. Testing: MockTeeRuntime provides
+// deterministic seal/quote and MockQuoteVerifier verifies that exact format,
+// so the trust boundary (runtime produces raw bytes, wallet verifies) is
+// exercised in CI without real hardware.
+
+/// Parsed, verified attestation - the wallet's view of a quote AFTER the
+/// verifier has checked it against the hardware root of trust.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TeeAttestation {
-    /// Enclave measurement hash (MRENCLAVE / Nitro PCR0).
+    /// Enclave measurement hash (MRENCLAVE / Nitro PCR0), read from the quote.
     pub measurement: [u8; 32],
-    /// User-defined report data (typically a commitment hash).
+    /// Report data the quote was bound to (the seal digest).
     pub report_data: [u8; 32],
-    /// Attestation timestamp (unix seconds).
+    /// Attestation timestamp (unix seconds), read from the quote.
     pub timestamp: u64,
-    /// Backend identifier.
+    /// Backend identifier, read from the quote.
     pub backend: TeeBackendKind,
 }
 
@@ -106,15 +169,8 @@ impl TeeAttestation {
     }
 }
 
-/// Extended TEE runtime with attestation capability.
-pub trait TeeAttester: TeeRuntime {
-    /// Produce an attestation binding `report_data` to the enclave measurement.
-    fn attest(&self, report_data: [u8; 32]) -> Result<TeeAttestation, WalletError>;
-}
-
-/// Mock TEE runtime for testing ONLY. NOT for production use.
-/// Provides deterministic seal/attest with a fixed measurement.
-/// Production builds must use UnavailableTeeRuntime or a real SGX/Nitro adapter.
+/// Mock quote source for testing ONLY. NOT for production use.
+/// Provides deterministic seal/quote with a fixed measurement.
 #[cfg(test)]
 pub mod mock {
     use super::*;
@@ -125,6 +181,13 @@ pub mod mock {
         0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC,
         0xBA, 0x98,
     ];
+
+    /// Mock quote format:
+    ///   [0u8;4] magic "MOCKQ", measurement(32), report_data(32),
+    ///   backend(1), timestamp(8)
+    /// A verifier that understands this format is the ONLY thing that can
+    /// turn these bytes into a [`TeeAttestation`]; arbitrary bytes fail.
+    pub const MOCK_QUOTE_MAGIC: [u8; 4] = *b"MOCK";
 
     pub struct MockTeeRuntime {
         pub kind: TeeBackendKind,
@@ -156,13 +219,63 @@ pub mod mock {
         }
     }
 
-    impl TeeAttester for MockTeeRuntime {
-        fn attest(&self, report_data: [u8; 32]) -> Result<TeeAttestation, WalletError> {
+    impl TeeQuoter for MockTeeRuntime {
+        fn quote(&self, report_data: [u8; 32]) -> Result<Vec<u8>, WalletError> {
+            let mut q = Vec::with_capacity(4 + 32 + 32 + 1 + 8);
+            q.extend_from_slice(&MOCK_QUOTE_MAGIC);
+            q.extend_from_slice(&MOCK_MEASUREMENT);
+            q.extend_from_slice(&report_data);
+            q.push(self.kind.as_str().as_bytes()[0]);
+            q.extend_from_slice(&0u64.to_le_bytes()); // deterministic timestamp
+            Ok(q)
+        }
+    }
+
+    /// Verifier that understands the mock quote format above. This stands in
+    /// for the hardware root-of-trust check: bytes that do not match the
+    /// format, or that name a measurement the verifier does not recognize,
+    /// are rejected.
+    pub struct MockQuoteVerifier {
+        pub recognized_measurements: Vec<[u8; 32]>,
+    }
+
+    impl Default for MockQuoteVerifier {
+        fn default() -> Self {
+            Self {
+                recognized_measurements: vec![MOCK_MEASUREMENT],
+            }
+        }
+    }
+
+    impl TeeQuoteVerifier for MockQuoteVerifier {
+        fn verify_quote(&self, quote: &[u8]) -> Result<TeeAttestation, WalletError> {
+            if quote.len() != 4 + 32 + 32 + 1 + 8 || quote[0..4] != MOCK_QUOTE_MAGIC {
+                return Err(WalletError::TeeUnavailable(
+                    "quote does not verify against the hardware root of trust".into(),
+                ));
+            }
+            let mut measurement = [0u8; 32];
+            measurement.copy_from_slice(&quote[4..36]);
+            if !self.recognized_measurements.contains(&measurement) {
+                return Err(WalletError::TeeUnavailable(
+                    "quote names an unrecognized enclave measurement".into(),
+                ));
+            }
+            let mut report_data = [0u8; 32];
+            report_data.copy_from_slice(&quote[36..68]);
+            let backend_byte = quote[68];
+            let backend = match backend_byte {
+                b'c' => TeeBackendKind::ClientSgx,
+                b's' => TeeBackendKind::ServerNitro,
+                _ => TeeBackendKind::None,
+            };
+            let mut timestamp_bytes = [0u8; 8];
+            timestamp_bytes.copy_from_slice(&quote[69..77]);
             Ok(TeeAttestation {
-                measurement: MOCK_MEASUREMENT,
+                measurement,
                 report_data,
-                timestamp: 0, // deterministic for tests
-                backend: self.kind,
+                timestamp: u64::from_le_bytes(timestamp_bytes),
+                backend,
             })
         }
     }
@@ -182,27 +295,48 @@ pub mod mock {
         }
 
         #[test]
-        fn mock_attest_binds_measurement() {
+        fn mock_quote_verifies_with_recognized_measurement() {
             let rt = MockTeeRuntime::new(TeeBackendKind::ServerNitro);
             let data = [42u8; 32];
-            let att = rt.attest(data).unwrap();
+            let quote = rt.quote(data).unwrap();
+            let verifier = MockQuoteVerifier::default();
+            let att = verifier.verify_quote(&quote).unwrap();
             assert!(att.verify_measurement(&MOCK_MEASUREMENT));
             assert!(att.verify_report_data(&data));
             assert_eq!(att.backend, TeeBackendKind::ServerNitro);
         }
 
         #[test]
-        fn mock_attest_wrong_measurement_fails() {
-            let rt = MockTeeRuntime::new(TeeBackendKind::ClientSgx);
-            let att = rt.attest([0u8; 32]).unwrap();
-            assert!(!att.verify_measurement(&[0xFF; 32]));
+        fn mock_quote_rejects_arbitrary_bytes() {
+            let verifier = MockQuoteVerifier::default();
+            let err = verifier.verify_quote(b"not a quote at all").unwrap_err();
+            assert!(matches!(err, WalletError::TeeUnavailable(_)));
         }
 
         #[test]
-        fn unavailable_runtime_rejects_seal() {
+        fn mock_quote_rejects_unrecognized_measurement() {
+            let verifier = MockQuoteVerifier {
+                recognized_measurements: vec![[0x11; 32]],
+            };
+            let rt = MockTeeRuntime::new(TeeBackendKind::ClientSgx);
+            let quote = rt.quote([0u8; 32]).unwrap();
+            let err = verifier.verify_quote(&quote).unwrap_err();
+            assert!(matches!(err, WalletError::TeeUnavailable(_)));
+        }
+
+        #[test]
+        fn unavailable_runtime_rejects_quote() {
             let rt = UnavailableTeeRuntime::for_backend(TeeBackendKind::ClientSgx);
             assert!(!rt.status().available);
             assert!(rt.seal_private_intent(b"test").is_err());
+            assert!(rt.quote([0u8; 32]).is_err());
+        }
+
+        #[test]
+        fn unavailable_verifier_rejects_everything() {
+            let v = UnavailableTeeQuoteVerifier;
+            let err = v.verify_quote(b"anything").unwrap_err();
+            assert!(matches!(err, WalletError::TeeUnavailable(_)));
         }
     }
 }

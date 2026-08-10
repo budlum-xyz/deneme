@@ -466,9 +466,19 @@ jobs:
           rc_all=0
           for h in "${slow[@]}"; do
             start=$(date +%s)
-            timeout 6000 cargo kani --harness "$h" --output-format terse \
-              > "/tmp/$h.log" 2>&1
-            rc=$?
+            # `timeout` returns 124 when the harness hits the cap. That is a
+            # measured fact, not a failure, and the step below reports it as
+            # TIMEOUT without turning the job red - which is the point of this
+            # measurement job. The `if/else` exists because GitHub's default
+            # bash shell runs with `-e`: a bare `timeout ...; rc=$?` would let
+            # the 124 exit kill the whole job before the classification lines
+            # ran, making every TIMEOUT a red run and the alarm meaningless.
+            if timeout 6000 cargo kani --harness "$h" --output-format terse \
+              > "/tmp/$h.log" 2>&1; then
+              rc=0
+            else
+              rc=$?
+            fi
             elapsed=$(( $(date +%s) - start ))
             if [ "$rc" -eq 124 ]; then
               result="TIMEOUT"

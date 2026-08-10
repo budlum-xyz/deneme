@@ -37,6 +37,10 @@ required_tests=(
   d2_wallet_private_transfer_with_change
   d2_wallet_tee_enabled_fail_closed_without_runtime
   d2_wallet_tee_ready_mock_allows_sign
+  d2_wallet_tee_requires_enrolled_measurement
+  d2_wallet_tee_rejects_foreign_measurement
+  d2_wallet_tee_rejects_wrong_backend
+  d2_wallet_tee_rejects_forged_quote
   d2_wallet_view_key_bound_to_seed
   d2_wallet_overspend_rejected
 )

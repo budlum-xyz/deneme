@@ -49,7 +49,10 @@ pub use privacy_transfer::{
     derive_blinding, derive_spend_secret, PrivateNoteInput, PrivateNoteOutput,
     PrivateTransferIntent, PrivateTransferRequest,
 };
-pub use tee::{TeeBackendKind, TeeRuntime, TeeRuntimeStatus, UnavailableTeeRuntime};
+pub use tee::{
+    TeeAttestation, TeeBackendKind, TeeQuoteVerifier, TeeQuoter, TeeRuntime, TeeRuntimeStatus,
+    UnavailableTeeQuoteVerifier, UnavailableTeeRuntime,
+};
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -408,6 +411,13 @@ pub struct Wallet {
     signing_key: SigningKey,
     /// Per-wallet privacy preferences (note path + TEE toggle + view-key).
     privacy: WalletPrivacyConfig,
+    /// The enclave measurement (MRENCLAVE / Nitro PCR0) this wallet deploys
+    /// and therefore trusts. `None` = not enrolled: TEE signing stays
+    /// fail-closed. A self-attesting software runtime can echo any
+    /// `report_data`, so binding the digest alone proves nothing about where
+    /// the seal happened; the measurement is the wallet's root of trust
+    /// (Strix MEDIUM, CWE-347, PR #149 follow-up).
+    trusted_tee_measurement: Option<[u8; 32]>,
 }
 
 // Zeroize sensitive material on drop.
@@ -809,6 +819,7 @@ impl Wallet {
             seed,
             signing_key,
             privacy: WalletPrivacyConfig::default(),
+            trusted_tee_measurement: None,
         })
     }
 
@@ -833,6 +844,7 @@ impl Wallet {
             seed,
             signing_key,
             privacy: WalletPrivacyConfig::default(),
+            trusted_tee_measurement: None,
         })
     }
 
@@ -932,6 +944,27 @@ impl Wallet {
         self.privacy.prefer_client_side_tee = prefer;
     }
 
+    /// Enrol the enclave measurement (MRENCLAVE / Nitro PCR0) this wallet
+    /// deploys. `sign_with_privacy` fails closed until a measurement is
+    /// enrolled and refuses any attestation whose `measurement` differs:
+    /// the measurement is the wallet's root of trust against a
+    /// self-attesting software runtime (Strix MEDIUM, CWE-347, PR #149
+    /// follow-up).
+    pub fn set_trusted_tee_measurement(&mut self, measurement: [u8; 32]) {
+        self.trusted_tee_measurement = Some(measurement);
+    }
+
+    /// Drop the enrolled measurement, returning TEE signing to fail-closed.
+    pub fn clear_trusted_tee_measurement(&mut self) {
+        self.trusted_tee_measurement = None;
+    }
+
+    /// The enrolled enclave measurement, if any.
+    #[must_use]
+    pub fn trusted_tee_measurement(&self) -> Option<&[u8; 32]> {
+        self.trusted_tee_measurement.as_ref()
+    }
+
     /// Ensure view-key exists (derived from wallet seed). Returns the key.
     pub fn ensure_view_key(&mut self) -> [u8; 32] {
         self.privacy.ensure_view_key(&self.seed)
@@ -985,19 +1018,78 @@ impl Wallet {
         Ok(st)
     }
 
-    /// Sign a message. If TEE is enabled, requires a live runtime and seals
-    /// The message before signing the seal digest (fail-closed otherwise).
+    /// Sign a message. If TEE is enabled, requires a live runtime, seals the
+    /// message, and requires an **attestation** binding the seal digest to
+    /// the enclave measurement before signing (fail-closed otherwise). The
+    /// attestation's `report_data` is the SHA-256 of the sealed bytes, so a
+    /// runtime that substitutes attacker-controlled sealed bytes cannot
+    /// produce an attestation for the digest the wallet signs (Strix HIGH,
+    /// deneme round 3 PR #244).
+    ///
+    /// The trust boundary is structural: the runtime produces only a **raw
+    /// quote** ([`TeeQuoter::quote`]) and the wallet verifies it with a
+    /// verifier it owns ([`TeeQuoteVerifier`]) that checks the quote against
+    /// the hardware root of trust. The runtime never supplies parsed
+    /// attestation fields, so a self-attesting software runtime cannot
+    /// fabricate an attestation by echoing fields back (Strix MEDIUM,
+    /// CWE-347, PR #149 follow-up). The wallet additionally requires its
+    /// enrolled measurement to match and the backend to match its preference;
+    /// signing fails closed while no measurement is enrolled.
     ///
     /// Without TEE, identical to classic Ed25519 `sign`.
     pub fn sign_with_privacy(
         &self,
         message: &[u8],
-        runtime: &dyn TeeRuntime,
+        runtime: &dyn TeeQuoter,
+        verifier: &dyn TeeQuoteVerifier,
     ) -> Result<[u8; 64], WalletError> {
         if self.privacy.tee_enabled {
             let _ = self.require_tee_ready(runtime)?;
             let sealed = runtime.seal_private_intent(message)?;
-            Ok(self.sign(&sealed))
+            // Bind the exact sealed bytes to a quote: an untrusted runtime
+            // cannot predict SHA-256(sealed) in advance, so replacing the
+            // sealed payload breaks the report data the quote is bound to.
+            let seal_digest: [u8; 32] = {
+                use sha3::{Digest, Sha3_256};
+                let mut h = Sha3_256::new();
+                h.update(&sealed);
+                h.finalize().into()
+            };
+            let quote = runtime.quote(seal_digest)?;
+            // The wallet's root of trust is the verifier it owns, which
+            // checks the quote against the hardware attestation root before
+            // parsing any field out of it.
+            let attestation = verifier.verify_quote(&quote)?;
+            // The wallet's deployed measurement is a second, independent
+            // gate: even a valid hardware quote must name the enclave this
+            // wallet actually deployed, and fail closed while none is
+            // enrolled.
+            let trusted = self.trusted_tee_measurement.ok_or_else(|| {
+                WalletError::TeeUnavailable(
+                    "no trusted TEE measurement enrolled; refusing a self-attested runtime".into(),
+                )
+            })?;
+            if !attestation.verify_measurement(&trusted) {
+                return Err(WalletError::TeeUnavailable(
+                    "TEE attestation measurement does not match the enrolled enclave".into(),
+                ));
+            }
+            if attestation.backend != self.tee_backend_kind() {
+                return Err(WalletError::TeeUnavailable(
+                    "TEE attestation backend does not match the wallet preference".into(),
+                ));
+            }
+            if !attestation.verify_report_data(&seal_digest) {
+                return Err(WalletError::TeeUnavailable(
+                    "TEE attestation does not bind the sealed intent digest".into(),
+                ));
+            }
+            // Sign the sealed bytes plus the attestation measurement so the
+            // signature commits to the enclave that sealed them.
+            let mut to_sign = Vec::with_capacity(sealed.len() + 32);
+            to_sign.extend_from_slice(&sealed);
+            to_sign.extend_from_slice(&attestation.measurement);
+            Ok(self.sign(&to_sign))
         } else {
             Ok(self.sign(message))
         }
@@ -1881,7 +1973,9 @@ mod tests {
         w.set_privacy_config(WalletPrivacyConfig::from_user_opt_in(true));
         assert!(w.privacy_config().tee_enabled);
         let rt = w.default_tee_runtime();
-        let err = w.sign_with_privacy(b"hello", &rt).unwrap_err();
+        let err = w
+            .sign_with_privacy(b"hello", &rt, &UnavailableTeeQuoteVerifier)
+            .unwrap_err();
         assert!(matches!(err, WalletError::TeeUnavailable(_)));
 
         let (blinding, _, _) = w.prepare_receive_note(10, 0).unwrap();
@@ -1900,28 +1994,105 @@ mod tests {
 
     #[test]
     fn d2_wallet_tee_ready_mock_allows_sign() {
-        struct MockTee;
-        impl TeeRuntime for MockTee {
+        let rt = crate::tee::mock::MockTeeRuntime::new(TeeBackendKind::ClientSgx);
+        let verifier = crate::tee::mock::MockQuoteVerifier::default();
+        let mut w = Wallet::from_entropy(&[0x66u8; 16]).unwrap();
+        w.set_tee_enabled(true);
+        // Enrol the measurement the mock attests with; without this the
+        // wallet would refuse any attestation, self-attested or not.
+        w.set_trusted_tee_measurement(crate::tee::mock::MOCK_MEASUREMENT);
+        let sig = w.sign_with_privacy(b"hello", &rt, &verifier).unwrap();
+        // Signature is over sealed bytes + measurement, not raw message.
+        assert!(!Wallet::verify(&w.public_key(), b"hello", &sig));
+        let sealed = rt.seal_private_intent(b"hello").unwrap();
+        let mut to_sign = sealed.clone();
+        to_sign.extend_from_slice(&crate::tee::mock::MOCK_MEASUREMENT);
+        assert!(Wallet::verify(&w.public_key(), &to_sign, &sig));
+    }
+
+    #[test]
+    fn d2_wallet_tee_requires_enrolled_measurement() {
+        // The runtime produces a quote and the verifier validates it, but the
+        // wallet has not enrolled any measurement, so it must refuse to sign
+        // rather than trust the runtime's own claim (Strix MEDIUM, CWE-347,
+        // PR #149 follow-up).
+        let rt = crate::tee::mock::MockTeeRuntime::new(TeeBackendKind::ClientSgx);
+        let verifier = crate::tee::mock::MockQuoteVerifier::default();
+        let mut w = Wallet::from_entropy(&[0x6Au8; 16]).unwrap();
+        w.set_tee_enabled(true);
+        let err = w.sign_with_privacy(b"hello", &rt, &verifier).unwrap_err();
+        assert!(matches!(err, WalletError::TeeUnavailable(_)));
+    }
+
+    #[test]
+    fn d2_wallet_tee_rejects_foreign_measurement() {
+        // The quote is valid and the verifier recognizes the enclave, but the
+        // enclave is not the one this wallet deployed: the enrolled
+        // measurement differs, so the wallet must not sign for it.
+        let rt = crate::tee::mock::MockTeeRuntime::new(TeeBackendKind::ClientSgx);
+        let foreign = [0xEE; 32];
+        let verifier = crate::tee::mock::MockQuoteVerifier {
+            recognized_measurements: vec![foreign],
+        };
+        let mut w = Wallet::from_entropy(&[0x6Bu8; 16]).unwrap();
+        w.set_tee_enabled(true);
+        w.set_trusted_tee_measurement(crate::tee::mock::MOCK_MEASUREMENT);
+        let err = w.sign_with_privacy(b"hello", &rt, &verifier).unwrap_err();
+        assert!(matches!(err, WalletError::TeeUnavailable(_)));
+    }
+
+    #[test]
+    fn d2_wallet_tee_rejects_wrong_backend() {
+        // Same measurement, wrong backend: the wallet prefers client-side
+        // SGX by default, and an attestation claiming a Nitro enclave the
+        // user did not opt into must not satisfy it.
+        let rt = crate::tee::mock::MockTeeRuntime::new(TeeBackendKind::ServerNitro);
+        let verifier = crate::tee::mock::MockQuoteVerifier::default();
+        let mut w = Wallet::from_entropy(&[0x6Cu8; 16]).unwrap();
+        w.set_tee_enabled(true);
+        w.set_trusted_tee_measurement(crate::tee::mock::MOCK_MEASUREMENT);
+        let err = w.sign_with_privacy(b"hello", &rt, &verifier).unwrap_err();
+        assert!(matches!(err, WalletError::TeeUnavailable(_)));
+    }
+
+    #[test]
+    fn d2_wallet_tee_rejects_forged_quote() {
+        // The runtime hands the wallet raw bytes. If those bytes are not a
+        // valid quote for the verifier's root of trust, the wallet refuses
+        // even though the runtime produced them itself: the runtime can
+        // never supply a parsed attestation (Strix MEDIUM, CWE-347).
+        let verifier = crate::tee::mock::MockQuoteVerifier::default();
+        struct ForgingRuntime;
+        impl TeeRuntime for ForgingRuntime {
             fn status(&self) -> TeeRuntimeStatus {
                 TeeRuntimeStatus {
                     kind: TeeBackendKind::ClientSgx,
                     available: true,
-                    detail: "mock".into(),
+                    detail: "forging".into(),
                 }
             }
             fn seal_private_intent(&self, plaintext: &[u8]) -> Result<Vec<u8>, WalletError> {
-                let mut out = b"SEAL:".to_vec();
+                let mut out = b"FORGED:".to_vec();
                 out.extend_from_slice(plaintext);
                 Ok(out)
             }
         }
-        let mut w = Wallet::from_entropy(&[0x66u8; 16]).unwrap();
+        impl TeeQuoter for ForgingRuntime {
+            fn quote(&self, report_data: [u8; 32]) -> Result<Vec<u8>, WalletError> {
+                // Try to hand the wallet a self-asserted "attestation"
+                // instead of a verifiable quote.
+                let mut fake = vec![0xFFu8; 77];
+                fake[36..68].copy_from_slice(&report_data);
+                Ok(fake)
+            }
+        }
+        let mut w = Wallet::from_entropy(&[0x6Du8; 16]).unwrap();
         w.set_tee_enabled(true);
-        let sig = w.sign_with_privacy(b"hello", &MockTee).unwrap();
-        // Signature is over sealed bytes, not raw message.
-        assert!(!Wallet::verify(&w.public_key(), b"hello", &sig));
-        let sealed = MockTee.seal_private_intent(b"hello").unwrap();
-        assert!(Wallet::verify(&w.public_key(), &sealed, &sig));
+        w.set_trusted_tee_measurement(crate::tee::mock::MOCK_MEASUREMENT);
+        let err = w
+            .sign_with_privacy(b"hello", &ForgingRuntime, &verifier)
+            .unwrap_err();
+        assert!(matches!(err, WalletError::TeeUnavailable(_)));
     }
 
     #[test]

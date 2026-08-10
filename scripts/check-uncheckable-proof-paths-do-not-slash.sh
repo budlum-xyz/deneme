@@ -76,8 +76,135 @@ if not os.path.isfile(src_path):
     sys.exit(2)
 
 src = open(src_path, encoding="utf-8").read()
-# Prose describing a rule must not satisfy a check about the rule.
-code = re.sub(r"//[^\n]*", "", src)
+
+
+def blank(text):
+    return "".join("\n" if c == "\n" else " " for c in text)
+
+
+
+def strip_rust_literals(text):
+    # Tek gecisli Rust literal tarayicisi (Strix MEDIUM, CWE-184, PR #149
+    # follow-up). Regex tabanli yaklasimlarin kokten siniri: ordinary string
+    # icindeki bir `r` (onunde bosluk/noktalama olsa bile) raw-string
+    # eslesmesini tetikleyip sonraki tirnaga kadar canli kodu silebiliyor.
+    # Burada ordinary/byte string, char/byte char ve raw string (r#, br#,
+    # hash sayisi eslesmesiyle) tek geciste, gercek Rust lexical kurallariyla
+    # ayirt edilir; string'ler once komple blank'lendigi icin iclerindeki
+    # hicbir bayt sonraki adimlari kandirmaz.
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "'":
+            # Char literal (`'{'`, `'}'`, `'\\n'`) kapanis tirnagi olan
+            # `'...'` desenidir; Rust lifetime `'a` kapanis tirnagi
+            # OLMADIGI icin char sanilip gercek kodu yutmaz (Strix MEDIUM,
+            # CWE-184, PR #149 follow-up).
+            start = i
+            j = i + 1
+            if j < n and text[j] == "\\":
+                j += 2  # escape'li char: '\n', '\\', '\''
+            else:
+                j += 1
+            if j < n and text[j] == "'":
+                out.append(blank(text[start : j + 1]))
+                i = j + 1
+                continue
+            out.append(text[i])
+            i += 1
+            continue
+        if text[i] == '"' or (text[i] == 'b' and i + 1 < n and text[i + 1] == '"'):
+            start = i
+            i += 2 if text[i] == 'b' else 1
+            while i < n:
+                if text[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            out.append(blank(text[start:i]))
+            continue
+        if text[i] == 'r' or (text[i] == 'b' and i + 1 < n and text[i + 1] == 'r'):
+            start = i
+            prefix = 2 if text[i] == 'b' else 1
+            j = i + prefix
+            while j < n and text[j] == '#':
+                j += 1
+            hashes = j - (i + prefix)
+            if j < n and text[j] == '"' and (
+                i == 0
+                or text[i - 1]
+                not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\"'"
+            ):
+                closing = '"' + ('#' * hashes)
+                end = j + 1
+                while end < n:
+                    if text.startswith(closing, end):
+                        end += len(closing)
+                        out.append(blank(text[start:end]))
+                        i = end
+                        break
+                    end += 1
+                else:
+                    out.append(text[i])
+                    i += 1
+                continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+def strip_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`); a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail looking
+    # like executable code (Strix MEDIUM, deneme round 3 PR #280).
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth:
+            out.append("\n" if text[i] == "\n" else " ")
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+# Prose describing a rule must not satisfy a check about the rule: strip
+# Rust literals (single-pass scanner), nested block comments and line
+# comments (preserving line structure) so only live code can satisfy the
+# gate (Strix MEDIUM, CWE-183/184, deneme round 3 PR #280; raw strings,
+# string-embedded comment markers and in-string `r`: Strix MEDIUM, CWE-184,
+# PR #149 follow-up).
+#
+# Strip order matters:
+#   1. literals first via a single-pass Rust literal scanner (ordinary
+#      byte strings and raw strings with matching hash count; Rust
+#      char literals cannot contain gate patterns, and `'a` lifetime
+#      markers must not be mistaken for char literals). A `/*` or `*/` *inside* a
+#      string is data, not a comment, and an `r` inside a string must not
+#      start a raw-string match, so literals are blanked before the comment
+#      walks.
+#   2. block comments with a depth counter (they nest in Rust).
+#   3. line comments last - after literals and blocks are gone, a `//` can
+#      only be a real line comment.
+code = strip_rust_literals(src)
+code = strip_block_comments(code)
+code = re.sub(r"//[^\n]*", "", code)
 
 problems = []
 checked = 0
@@ -325,7 +452,49 @@ self_test() {
     exit 1
   fi
 
-  echo "uncheckable-proof gate self-test OK: an unguarded verifier, a flag flipped to true, a carve-out that frees the no-proof case, a runtime-configurable flag, a deleted boundary test, comment-only prose and a missing file are all rejected; the contained tree passes."
+  # 9. A guard hidden in a raw string literal must not satisfy the checks.
+  #    `r#"..."#` does not process escapes, so a flat string regex stops at
+  #    the first quote and the tail looks like live code (Strix MEDIUM,
+  #    CWE-184, PR #149 follow-up).
+  mk "$tmp/rawstr" '        // pub(crate) fn storage_challenge_proofs_are_checkable() -> bool { false }
+        let prose = r#"
+            (Some(_), Some(_)) if !Self::storage_challenge_proofs_are_checkable() => Ok(()),
+            fn an_answer_carrying_a_proof_does_not_cost_the_bond_while_proofs_are_uncheckable() {}
+        "#;'
+  if ( scan "$tmp/rawstr" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a guard hidden in a raw string literal was accepted!" >&2
+    exit 1
+  fi
+
+  # 11. An ordinary string containing `r` (e.g. `let prose = "r";`) must not
+  #     be mistaken for a raw-string start; the raw-string strip blanks only
+  #     real `r`/`br` prefixes (lookbehind), so live code after such a string
+  #     stays visible to the gate (Strix MEDIUM, CWE-184, PR #149 follow-up).
+  mk "$tmp/rinstring" '        // pub(crate) fn storage_challenge_proofs_are_checkable() -> bool { false }
+        let prose = " r";
+        (Some(_), Some(_)) if !Self::storage_challenge_proofs_are_checkable() => Err(StorageError::InvalidMerkleProof("x".into())),
+        let tail = "(r";'
+  if ( scan "$tmp/rinstring" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: code hidden after an ordinary string containing r was accepted!" >&2
+    exit 1
+  fi
+
+  # 10. A `/*` or `*/` embedded inside an ordinary string literal must not
+  #     make the block-comment walk treat following live code as comment
+  #     tail. String literals are blanked before the depth counter, so a
+  #     string carrying comment markers cannot hide a guard that must exist
+  #     or hide code that must not exist (Strix MEDIUM, CWE-184, PR #149
+  #     follow-up).
+  mk "$tmp/strmarker" '        // pub(crate) fn storage_challenge_proofs_are_checkable() -> bool { false }
+        let prose_a = "/* ";
+        (Some(_), Some(_)) if !Self::storage_challenge_proofs_are_checkable() => Err(StorageError::InvalidMerkleProof("x".into())),
+        let prose_b = " */";'
+  if ( scan "$tmp/strmarker" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: code hidden by comment markers inside strings was accepted!" >&2
+    exit 1
+  fi
+
+  echo "uncheckable-proof gate self-test OK: an unguarded verifier, a flag flipped to true, a carve-out that frees the no-proof case, a runtime-configurable flag, a deleted boundary test, comment-only prose, a raw-string-hidden guard, code hidden by comment markers inside strings, code hidden after an ordinary string containing r and a missing file are all rejected; the contained tree passes."
 }
 
 if [ "${1:-}" = "--self-test" ]; then

@@ -1032,6 +1032,10 @@ impl AccountState {
         distributions
     }
 
+    /// Validate a transaction against the account state: nonce, spendable
+    /// balance, fee and type. A zero-address sender is only admissible as the
+    /// canonical genesis transaction (Strix HIGH, CWE-306, deneme round 3
+    /// PR #237); any other zero-address transaction fails here.
     pub fn validate_transaction_with_context(
         &self,
         tx: &Transaction,
@@ -1039,7 +1043,12 @@ impl AccountState {
         spendable_balance: u64,
     ) -> Result<(), String> {
         if tx.from == Address::zero() {
-            return Ok(());
+            if tx.verify() {
+                return Ok(());
+            }
+            return Err(
+                "zero-address sender is only valid for the canonical genesis transaction".into(),
+            );
         }
         if self.burn_reserve_address == Some(tx.from) {
             return Err(
@@ -1526,10 +1535,17 @@ impl AccountState {
                         .slashing_history_for(address)
                         .iter()
                         .any(|record| {
-                            use sha2::{Digest, Sha256};
+                            // The evidence must be a VALIDATOR slashing record.
+                            // A slash record for another role on the same
+                            // address (e.g. a VERIFIER) proves nothing about
+                            // the validator role this proposal is slashing
+                            // (Strix HIGH, deneme round 3 PR #255 / PR #261).
+                            if record.report.role != crate::registry::role::roles::VALIDATOR {
+                                return false;
+                            }
                             let bytes = bincode::serialize(&record.report)
                                 .expect("SlashingReport must serialize");
-                            Sha256::digest(&bytes).as_slice() == evidence_hash
+                            sha2::Sha256::digest(&bytes).as_slice() == evidence_hash
                         });
                 if !evidence_matches {
                     tracing::warn!(

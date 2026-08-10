@@ -85,6 +85,115 @@ SIDE_TABLE_ACCUMULATORS = [
 problems = []
 checked = 0
 
+
+def blank(text):
+    return "".join("\n" if c == "\n" else " " for c in text)
+
+
+
+def strip_rust_literals(text):
+    # Tek gecisli Rust literal tarayicisi (Strix MEDIUM, CWE-184, PR #149
+    # follow-up). Regex tabanli yaklasimlarin kokten siniri: ordinary string
+    # icindeki bir `r` (onunde bosluk/noktalama olsa bile) raw-string
+    # eslesmesini tetikleyip sonraki tirnaga kadar canli kodu silebiliyor.
+    # Burada ordinary/byte string, char/byte char ve raw string (r#, br#,
+    # hash sayisi eslesmesiyle) tek geciste, gercek Rust lexical kurallariyla
+    # ayirt edilir; string'ler once komple blank'lendigi icin iclerindeki
+    # hicbir bayt sonraki adimlari kandirmaz.
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "'":
+            # Char literal (`'{'`, `'}'`, `'\\n'`) kapanis tirnagi olan
+            # `'...'` desenidir; Rust lifetime `'a` kapanis tirnagi
+            # OLMADIGI icin char sanilip gercek kodu yutmaz (Strix MEDIUM,
+            # CWE-184, PR #149 follow-up).
+            start = i
+            j = i + 1
+            if j < n and text[j] == "\\":
+                j += 2  # escape'li char: '\n', '\\', '\''
+            else:
+                j += 1
+            if j < n and text[j] == "'":
+                out.append(blank(text[start : j + 1]))
+                i = j + 1
+                continue
+            out.append(text[i])
+            i += 1
+            continue
+        if text[i] == '"' or (text[i] == 'b' and i + 1 < n and text[i + 1] == '"'):
+            start = i
+            i += 2 if text[i] == 'b' else 1
+            while i < n:
+                if text[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            out.append(blank(text[start:i]))
+            continue
+        if text[i] == 'r' or (text[i] == 'b' and i + 1 < n and text[i + 1] == 'r'):
+            start = i
+            prefix = 2 if text[i] == 'b' else 1
+            j = i + prefix
+            while j < n and text[j] == '#':
+                j += 1
+            hashes = j - (i + prefix)
+            if j < n and text[j] == '"' and (
+                i == 0
+                or text[i - 1]
+                not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\"'"
+            ):
+                closing = '"' + ('#' * hashes)
+                end = j + 1
+                while end < n:
+                    if text.startswith(closing, end):
+                        end += len(closing)
+                        out.append(blank(text[start:end]))
+                        i = end
+                        break
+                    end += 1
+                else:
+                    out.append(text[i])
+                    i += 1
+                continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+def strip_block_comments(text):
+    # Rust block comments nest (`/* outer /* inner */ tail */`); a flat
+    # non-greedy regex stops at the first `*/` and leaves the tail looking
+    # like executable code, so a binding hidden in the tail of a nested
+    # comment could satisfy the gate (Strix MEDIUM, CWE-184, PR #149
+    # follow-up). Walk with a depth counter instead.
+    out = []
+    i = 0
+    depth = 0
+    n = len(text)
+    while i < n:
+        if i + 1 < n and text[i : i + 2] == "/*":
+            depth += 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth and i + 1 < n and text[i : i + 2] == "*/":
+            depth -= 1
+            out.append("  ")
+            i += 2
+            continue
+        if depth:
+            out.append("\n" if text[i] == "\n" else " ")
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 for column, table in SIDE_TABLE_ACCUMULATORS:
     if column not in src:
         problems.append(
@@ -96,9 +205,32 @@ for column, table in SIDE_TABLE_ACCUMULATORS:
     # Find the block that binds this accumulator to a public input. The
     # binding reads the column into a local and compares it against
     # `public_inputs[..]`, so look for the brace-delimited block containing
-    # both.
+    # both. Work on a comment- and literal-stripped view first so a
+    # commented-out or quoted block cannot be mistaken for the real binding
+    # (Strix HIGH, CWE-184, deneme round 3 PR #280).
+    #
+    # Strip order matters (Strix MEDIUM, CWE-184, PR #149 follow-up):
+    #   1. literals first via a single-pass Rust literal scanner (ordinary,
+    #      byte, char, raw with matching hash count). A `/*` or `*/` *inside*
+    #      a string is data, not a comment, and an `r` inside a string must
+    #      not start a raw-string match, so literals are blanked before the
+    #      comment walks.
+    #   2. block comments with a depth counter (they nest in Rust; a flat
+    #      regex leaves the tail of a nested comment visible as fake code).
+    #   3. line comments last - after literals and blocks are gone, a `//`
+    #      can only be a real line comment.
+    scrubbed = strip_rust_literals(src)
+    scrubbed = strip_block_comments(scrubbed)
+    scrubbed = re.sub(
+        r'//[^\n]*',
+        lambda m: "\n" * m.group(0).count("\n"),
+        scrubbed,
+        flags=re.DOTALL,
+    )
     blocks = []
-    for m in re.finditer(rf"\{{[^{{}}]*{re.escape(column)}[^{{}}]*\}}", src, re.DOTALL):
+    for m in re.finditer(
+        rf"\{{[^{{}}]*{re.escape(column)}[^{{}}]*\}}", scrubbed, re.DOTALL
+    ):
         body = m.group(0)
         if "public_inputs" in body:
             blocks.append((m.start(), body))
@@ -282,7 +414,98 @@ pub const COL_REG_INIT_ACC: usize = 736;
     exit 1
   fi
 
-  echo "cross-table gate self-test OK: a memory accumulator on the last CPU row, a register accumulator on is_halt, a last-row check narrowed by a CPU gate, an unbound accumulator, a deleted column and a missing AIR are all rejected; the corrected tree passes."
+  # 8. A binding hidden in the tail of a nested block comment must not
+  #    satisfy the gate. Rust block comments nest, so `/* outer /* inner */`
+  #    closes at the inner `*/` and a flat regex would leave the outer tail
+  #    looking like live code; the depth counter must swallow the whole
+  #    comment so the memory accumulator reads as unbound.
+  mk "$tmp/nested" 'pub const COL_MEM_INIT_ACC: usize = 731;
+pub const COL_REG_INIT_ACC: usize = 736;
+        /* outer explanation
+           /* inner note */
+           {
+               let acc_last: AB::Expr = cur[COL_MEM_INIT_ACC].into();
+               let expected = public_inputs[10].into();
+               builder.when_last_row().assert_eq(acc_last, expected);
+           }
+        */
+        {
+            let acc_last: AB::Expr = cur[COL_REG_INIT_ACC].into();
+            let expected = public_inputs[12].into();
+            builder.when_last_row().assert_eq(acc_last, expected);
+        }'
+  if ( scan "$tmp/nested" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a binding hidden in a nested block comment was accepted!" >&2
+    exit 1
+  fi
+
+  # 9. A binding hidden in a raw string literal must not satisfy the gate.
+  #    `r#"..."#` does not process escapes, so a flat string regex stops at
+  #    the first quote and the tail looks like live code; the raw-string
+  #    strip must swallow the whole literal (Strix MEDIUM, CWE-184, PR #149
+  #    follow-up).
+  mk "$tmp/rawstr" 'pub const COL_MEM_INIT_ACC: usize = 731;
+pub const COL_REG_INIT_ACC: usize = 736;
+        let prose = r#"a binding hidden in prose:
+        {
+            let acc_last: AB::Expr = cur[COL_MEM_INIT_ACC].into();
+            let expected = public_inputs[10].into();
+            builder.when_last_row().assert_eq(acc_last, expected);
+        }
+        "#;
+        {
+            let acc_last: AB::Expr = cur[COL_REG_INIT_ACC].into();
+            let expected = public_inputs[12].into();
+            builder.when_last_row().assert_eq(acc_last, expected);
+        }'
+  if ( scan "$tmp/rawstr" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a binding hidden in a raw string literal was accepted!" >&2
+    exit 1
+  fi
+
+  # 11. An ordinary string containing `r` (e.g. `let prose = "r";`) must not
+  #     be mistaken for a raw-string start; the raw-string strip blanks only
+  #     real `r`/`br` prefixes (lookbehind), so live code after such a string
+  #     stays visible to the gate (Strix MEDIUM, CWE-184, PR #149 follow-up).
+  mk "$tmp/rinstring" 'pub const COL_MEM_INIT_ACC: usize = 731;
+pub const COL_REG_INIT_ACC: usize = 736;
+        let prose = " r";
+        {
+            let acc_last: AB::Expr = cur[COL_MEM_INIT_ACC].into();
+            let expected = public_inputs[10].into();
+            builder.when(is_halt.clone()).when(cpu_active.clone()).assert_eq(acc_last, expected);
+        }
+        let tail = "(r";'
+  if ( scan "$tmp/rinstring" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: code hidden after an ordinary string containing r was accepted!" >&2
+    exit 1
+  fi
+
+  # 10. A `/*` or `*/` embedded inside an ordinary string literal must not
+  #     make the block-comment walk treat following live code as comment
+  #     tail. String literals are blanked before the depth counter, so a
+  #     string carrying comment markers cannot hide the bad binding (Strix
+  #     MEDIUM, CWE-184, PR #149 follow-up).
+  mk "$tmp/strmarker" 'pub const COL_MEM_INIT_ACC: usize = 731;
+pub const COL_REG_INIT_ACC: usize = 736;
+        let prose_a = "/* ";
+        {
+            let acc_last: AB::Expr = cur[COL_MEM_INIT_ACC].into();
+            let expected = public_inputs[10].into();
+            builder.when(is_halt.clone()).when(cpu_active.clone()).assert_eq(acc_last, expected);
+        }
+        let prose_b = " */";
+        {
+            let acc_last: AB::Expr = cur[COL_REG_INIT_ACC].into();
+            let expected = public_inputs[12].into();
+            builder.when_last_row().assert_eq(acc_last, expected);
+        }'
+  if ( scan "$tmp/strmarker" ) >/dev/null 2>&1; then
+    echo "VACUOUS GATE: a bad binding hidden by comment markers inside strings was accepted!" >&2
+    exit 1
+  fi
+
+  echo "cross-table gate self-test OK: a memory accumulator on the last CPU row, a register accumulator on is_halt, a last-row check narrowed by a CPU gate, an unbound accumulator, a deleted column, a missing AIR, a binding hidden in a nested comment, a binding hidden in a raw string, a bad binding hidden by comment markers inside strings and code hidden after an ordinary string containing r are all rejected; the corrected tree passes."
 }
 
 if [ "${1:-}" = "--self-test" ]; then

@@ -88,16 +88,186 @@ for dirpath, _, filenames in os.walk(root):
         except OSError:
             continue
 
-        # field -> declared collection type, across the whole file
+        # (module scope, field) -> declared collection type or alias name.
+        # Rust resolves names lexically per module: an inner `mod attacker`
+        # can shadow an outer alias of the same name, so a file-wide flat map
+        # would let a safe outer alias mask an unsafe inner one (Strix
+        # MEDIUM, CWE-184, PR #149 follow-up).
         declared = {}
-        for line in lines:
+        # (module scope, alias) -> resolved collection type (or another alias).
+        aliases = {}
+
+        def scoped_get(table, scope, name):
+            for i in range(len(scope), -1, -1):
+                key = (scope[:i], name)
+                if key in table:
+                    return table[key]
+            return None
+
+        def blank(text):
+            return "".join("\n" if c == "\n" else " " for c in text)
+
+        def strip_rust_literals(text):
+            # Tek gecisli Rust literal tarayicisi (Strix MEDIUM, CWE-184,
+            # PR #149 follow-up). Ordinary/byte string, raw string (r#, br#,
+            # hash sayisi eslesmesiyle) ve char literal tek geciste ayirt
+            # edilir. Char literal (`'{'`, `'}'`, `'\\n'`) kapanis tirnagi
+            # olan `'...'` desenidir; Rust lifetime `'a` kapanis tirnagi
+            # OLMADIGI icin char sanilip gercek kodu yutmaz.
+            out = []
+            i = 0
+            n = len(text)
+            while i < n:
+                if text[i] == "'":
+                    start = i
+                    j = i + 1
+                    if j < n and text[j] == "\\":
+                        j += 2  # escape'li char: '\n', '\\', '\''
+                    else:
+                        j += 1
+                    if j < n and text[j] == "'":
+                        # Kapanis tirnagi var -> char literal, blank'le.
+                        out.append(blank(text[start : j + 1]))
+                        i = j + 1
+                        continue
+                    # Kapanis tirnagi yok -> lifetime ('a): dokunma.
+                    out.append(text[i])
+                    i += 1
+                    continue
+                if text[i] == '"' or (text[i] == 'b' and i + 1 < n and text[i + 1] == '"'):
+                    start = i
+                    i += 2 if text[i] == 'b' else 1
+                    while i < n:
+                        if text[i] == "\\" and i + 1 < n:
+                            i += 2
+                            continue
+                        if text[i] == '"':
+                            i += 1
+                            break
+                        i += 1
+                    out.append(blank(text[start:i]))
+                    continue
+                if text[i] == 'r' or (text[i] == 'b' and i + 1 < n and text[i + 1] == 'r'):
+                    start = i
+                    prefix = 2 if text[i] == 'b' else 1
+                    j = i + prefix
+                    while j < n and text[j] == '#':
+                        j += 1
+                    hashes = j - (i + prefix)
+                    if j < n and text[j] == '"' and (
+                        i == 0
+                        or text[i - 1]
+                        not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_\"'"
+                    ):
+                        closing = '"' + ('#' * hashes)
+                        end = j + 1
+                        while end < n:
+                            if text.startswith(closing, end):
+                                end += len(closing)
+                                out.append(blank(text[start:end]))
+                                i = end
+                                break
+                            end += 1
+                        else:
+                            out.append(text[i])
+                            i += 1
+                        continue
+                out.append(text[i])
+                i += 1
+            return "".join(out)
+
+        def strip_block_comments(text):
+            # Rust block comment'leri ic ice olabilir; depth counter ile.
+            out = []
+            i = 0
+            depth = 0
+            n = len(text)
+            while i < n:
+                if i + 1 < n and text[i : i + 2] == "/*":
+                    depth += 1
+                    out.append("  ")
+                    i += 2
+                    continue
+                if depth and i + 1 < n and text[i : i + 2] == "*/":
+                    depth -= 1
+                    out.append("  ")
+                    i += 2
+                    continue
+                if depth:
+                    out.append("\n" if text[i] == "\n" else " ")
+                    i += 1
+                    continue
+                out.append(text[i])
+                i += 1
+            return "".join(out)
+
+        # Modul scope takibi yorum/string icindeki suslu parantezlerden
+        # etkilenmemeli: string/raw literal'ler, block comment'ler ve line
+        # comment'ler once blank'lenir (satir yapisi korunur), braces sayimi
+        # ve modul/alias/field desenleri bu temiz gorunumde aranir (Strix
+        # MEDIUM, CWE-184, PR #149 follow-up).
+        scrubbed_all = strip_block_comments(strip_rust_literals("\n".join(lines)))
+        scrubbed_all = re.sub(
+            r"//[^\n]*",
+            lambda m: "\n" * m.group(0).count("\n"),
+            scrubbed_all,
+            flags=re.DOTALL,
+        )
+        scrubbed_lines = scrubbed_all.split("\n")
+
+        module_stack = []
+        block_depth = 0
+        line_scopes = []
+        for idx, line in enumerate(lines):
+            sline = scrubbed_lines[idx] if idx < len(scrubbed_lines) else line
+            mod = re.match(r'\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{', sline)
+            if mod:
+                module_stack.append((mod.group(1), block_depth + sline.count('{')))
+
+            scope = tuple(name for name, _ in module_stack)
+            line_scopes.append(scope)
+            block_depth += sline.count('{') - sline.count('}')
+            alias = re.match(
+                r'\s*(?:pub(?:\([^)]*\))?\s+)?type\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*<[^>]+>)?\s*=\s*'
+                r'([A-Za-z_][A-Za-z0-9_:]*)',
+                sline,
+            )
+            if alias:
+                aliases[(scope, alias.group(1))] = alias.group(2).split('::')[-1]
             m = re.match(
-                r'\s*(?:pub(?:\([a-z()]+\))? )?([a-z_][a-z0-9_]*)\s*:\s*'
+                r'\s*(?:pub(?:\([^)]*\))? )?([a-z_][a-z0-9_]*)\s*:\s*'
                 r'(BTreeMap|BTreeSet|HashMap|HashSet|Vec)\s*<',
-                line,
+                sline,
             )
             if m:
-                declared.setdefault(m.group(1), m.group(2))
+                declared[(scope, m.group(1))] = m.group(2)
+            else:
+                # A field whose declared type is a user alias must be
+                # resolved to the underlying collection type before deciding
+                # whether its iteration order is unordered. Aliases may be
+                # lowercase (`type entries = HashMap<..>`) or uppercase; the
+                # type pattern accepts both, so `rows: entries` resolves the
+                # same as `rows: Entries`. Generic aliases (`type Entries<K, V>
+                # = HashMap<K, V>` used as `rows: Entries<u64, u64>`) and
+                # nested generic applications (`Entries<HashMap<..>, ..>`)
+                # are also recognised, so generic parameters cannot hide an
+                # unordered map (Strix MEDIUM, CWE-184, deneme round 3
+                # PR #272; lowercase, generic, nested-generic and
+                # path-qualified aliases: PR #149 follow-up). A field type may
+                # be path-qualified (`rows: super::entries`); the last path
+                # segment is what the alias map resolves.
+                am = re.match(
+                    r'\s*(?:pub(?:\([^)]*\))? )?([a-z_][a-z0-9_]*)\s*:\s*'
+                    r'([A-Za-z_][A-Za-z0-9_:]*)(?:\s*<.*>)?\s*,?\s*$',
+                    sline,
+                )
+                if am:
+                    declared[(scope, am.group(1))] = am.group(2).split('::')[-1]
+            # Pop modules whose brace block has closed. `module_stack` entries
+            # carry the block depth at which the module opened; once the
+            # running depth drops below it, the module is out of scope.
+            while module_stack and block_depth < module_stack[-1][1]:
+                module_stack.pop()
 
         inside = False
         depth = 0
@@ -134,7 +304,21 @@ for dirpath, _, filenames in os.walk(root):
             it = ITER.search(line) or ITER.search(window)
             if it:
                 field = it.group(1)
-                kind = declared.get(field)
+                scope = line_scopes[i] if i < len(line_scopes) else ()
+                kind = scoped_get(declared, scope, field)
+                # Resolve alias chains: `type Entries = HashMap<..>` then
+                # `entries: Entries` iterates a HashMap. The chain follows
+                # scope too: an alias visible at the use site may itself be
+                # shadowed deeper in a module (Strix MEDIUM, CWE-184, deneme
+                # round 3 PR #272; nested/shadowed aliases: PR #149
+                # follow-up).
+                seen = set()
+                while kind is not None and kind not in seen:
+                    seen.add(kind)
+                    nxt = scoped_get(aliases, scope, kind)
+                    if nxt is None:
+                        break
+                    kind = nxt
                 if kind in ('HashMap', 'HashSet'):
                     # Order matters only when the loop FOLDS into a shared
                     # accumulator. A loop that writes each entry to its own
@@ -254,6 +438,238 @@ RS
     exit 1
   fi
 
+  # A lowercase type alias must resolve the same as an uppercase one. If the
+  # gate only recognised `type Entries = HashMap<..>`, declaring
+  # `type entries = HashMap<u64, u64>;` and using `rows: entries` would hide
+  # the unordered iteration from the check (Strix MEDIUM, CWE-184, PR #149
+  # follow-up).
+  cat > "$tmp/src/ok.rs" <<'RS'
+type entries = HashMap<u64, u64>;
+pub struct Registry {
+    rows: entries,
+}
+impl Registry {
+    pub fn root(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        for (k, v) in &self.rows {
+            hasher.update(k.to_le_bytes());
+            hasher.update(v.to_le_bytes());
+        }
+        hasher.finalize().into()
+    }
+}
+RS
+  if (scan "$tmp" >/dev/null 2>&1); then
+    echo "VACUOUS GATE: a lowercase alias hiding a hashed HashMap was accepted!" >&2
+    exit 1
+  fi
+
+  # A generic alias must resolve the same as a plain one. Declaring
+  # `type Entries<K, V> = HashMap<K, V>;` and using `rows: Entries<u64, u64>`
+  # would hide the unordered iteration if the field pattern did not accept
+  # generic arguments after the alias name (Strix MEDIUM, CWE-184, PR #149
+  # follow-up).
+  cat > "$tmp/src/ok.rs" <<'RS'
+type Entries<K, V> = HashMap<K, V>;
+pub struct Registry {
+    rows: Entries<u64, u64>,
+}
+impl Registry {
+    pub fn root(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        for (k, v) in &self.rows {
+            hasher.update(k.to_le_bytes());
+            hasher.update(v.to_le_bytes());
+        }
+        hasher.finalize().into()
+    }
+}
+RS
+  if (scan "$tmp" >/dev/null 2>&1); then
+    echo "VACUOUS GATE: a generic alias hiding a hashed HashMap was accepted!" >&2
+    exit 1
+  fi
+
+  # A nested generic application must resolve the same as a plain one.
+  # `rows: Entries<HashMap<u64, u64>, u64>` has nested angle brackets; if the
+  # field pattern stopped at the first `>`, the alias would not be recognised
+  # and the unordered iteration would evade the gate (Strix MEDIUM, CWE-184,
+  # PR #149 follow-up).
+  cat > "$tmp/src/ok.rs" <<'RS'
+type Entries<K, V> = HashMap<K, V>;
+pub struct Registry {
+    rows: Entries<HashMap<u64, u64>, u64>,
+}
+impl Registry {
+    pub fn root(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        for (k, v) in &self.rows {
+            hasher.update(k.to_le_bytes());
+            hasher.update(v.to_le_bytes());
+        }
+        hasher.finalize().into()
+    }
+}
+RS
+  if (scan "$tmp" >/dev/null 2>&1); then
+    echo "VACUOUS GATE: a nested generic alias hiding a hashed HashMap was accepted!" >&2
+    exit 1
+  fi
+
+  # A path-qualified alias use must resolve the same as a plain one. If the
+  # field pattern did not accept `::` in the type name, `rows: super::entries`
+  # would not be recognised as the `entries` alias and the unordered iteration
+  # would evade the gate (Strix MEDIUM, CWE-184, PR #149 follow-up).
+  cat > "$tmp/src/ok.rs" <<'RS'
+type entries = HashMap<u64, u64>;
+pub struct Registry {
+    rows: super::entries,
+}
+impl Registry {
+    pub fn root(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        for (k, v) in &self.rows {
+            hasher.update(k.to_le_bytes());
+            hasher.update(v.to_le_bytes());
+        }
+        hasher.finalize().into()
+    }
+}
+RS
+  if (scan "$tmp" >/dev/null 2>&1); then
+    echo "VACUOUS GATE: a path-qualified alias hiding a hashed HashMap was accepted!" >&2
+    exit 1
+  fi
+
+  # A path-qualified visibility (`pub(in crate::m) type entries = HashMap<..>`)
+  # must resolve the same as a plain one; the visibility parentheses may hold
+  # an arbitrary path, not just bare `crate`/`super` keywords (Strix MEDIUM,
+  # CWE-184, PR #149 follow-up).
+  cat > "$tmp/src/ok.rs" <<'RS'
+pub(in crate::m) type entries = HashMap<u64, u64>;
+pub struct Registry {
+    rows: entries,
+}
+impl Registry {
+    pub fn root(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        for (k, v) in &self.rows {
+            hasher.update(k.to_le_bytes());
+            hasher.update(v.to_le_bytes());
+        }
+        hasher.finalize().into()
+    }
+}
+RS
+  if (scan "$tmp" >/dev/null 2>&1); then
+    echo "VACUOUS GATE: a visibility-qualified alias hiding a hashed HashMap was accepted!" >&2
+    exit 1
+  fi
+
+  # A shadowed alias inside a module must not be masked by a safe outer alias
+  # of the same name. Rust resolves names lexically per module, so the inner
+  # `type Entries = HashMap<..>` is the one `root()` iterates even though an
+  # outer `type Entries = BTreeMap<..>` exists. The module may itself carry a
+  # visibility qualifier (`pub(crate) mod`), which the scope walk must accept
+  # (Strix MEDIUM, CWE-184, PR #149 follow-up).
+  cat > "$tmp/src/ok.rs" <<'RS'
+use std::collections::{BTreeMap, HashMap};
+use sha2::{Digest, Sha256};
+
+type Entries = BTreeMap<u64, u64>;
+
+pub(crate) mod attacker {
+    use super::*;
+    type Entries = HashMap<u64, u64>;
+    pub struct Registry {
+        rows: Entries,
+    }
+    impl Registry {
+        pub fn root(&self) -> [u8; 32] {
+            let mut hasher = Sha256::new();
+            for (k, v) in &self.rows {
+                hasher.update(k.to_le_bytes());
+                hasher.update(v.to_le_bytes());
+            }
+            hasher.finalize().into()
+        }
+    }
+}
+RS
+  if (scan "$tmp" >/dev/null 2>&1); then
+    echo "VACUOUS GATE: an inner module shadowing an outer alias was accepted!" >&2
+    exit 1
+  fi
+
+  # A stray `}` inside a comment or string must not pop the module scope
+  # early. If braces were counted on raw lines, `// }` inside the module
+  # would close it, the inner HashMap alias would resolve to the outer safe
+  # BTreeMap, and the unordered iteration would pass (Strix MEDIUM, CWE-184,
+  # PR #149 follow-up).
+  cat > "$tmp/src/ok.rs" <<'RS'
+use std::collections::{BTreeMap, HashMap};
+use sha2::{Digest, Sha256};
+
+type Entries = BTreeMap<u64, u64>;
+
+pub(crate) mod attacker {
+    use super::*;
+    type Entries = HashMap<u64, u64>;
+    pub struct Registry {
+        rows: Entries,
+        // }  this brace is inside a comment
+    }
+    impl Registry {
+        pub fn root(&self) -> [u8; 32] {
+            let marker = "}";  // and this one inside a string
+            let mut hasher = Sha256::new();
+            for (k, v) in &self.rows {
+                hasher.update(k.to_le_bytes());
+                hasher.update(v.to_le_bytes());
+            }
+            hasher.finalize().into()
+        }
+    }
+}
+RS
+  if (scan "$tmp" >/dev/null 2>&1); then
+    echo "VACUOUS GATE: comment/string braces popping module scope early was accepted!" >&2
+    exit 1
+  fi
+
+  # A `}` inside a char literal must not pop the module scope early.
+  # `const X: char = '}';` inside the module is data, not a closing brace
+  # (Strix MEDIUM, CWE-184, PR #149 follow-up).
+  cat > "$tmp/src/ok.rs" <<'RS'
+use std::collections::{BTreeMap, HashMap};
+use sha2::{Digest, Sha256};
+
+type Entries = BTreeMap<u64, u64>;
+
+pub(crate) mod attacker {
+    use super::*;
+    const CLOSER: char = '}';
+    type Entries = HashMap<u64, u64>;
+    pub struct Registry {
+        rows: Entries,
+    }
+    impl Registry {
+        pub fn root(&self) -> [u8; 32] {
+            let mut hasher = Sha256::new();
+            for (k, v) in &self.rows {
+                hasher.update(k.to_le_bytes());
+                hasher.update(v.to_le_bytes());
+            }
+            hasher.finalize().into()
+        }
+    }
+}
+RS
+  if (scan "$tmp" >/dev/null 2>&1); then
+    echo "VACUOUS GATE: a char literal brace popping module scope early was accepted!" >&2
+    exit 1
+  fi
+
   # And the same shape wrapped across lines by the formatter.
   cat > "$tmp/src/ok.rs" <<'RS'
 pub struct Registry {
@@ -305,8 +721,13 @@ RS
   fi
 
   echo "Consensus-map ordering self-test OK: a hashed HashMap, one walked as \
-(key, value) pairs and one wrapped across lines are all rejected; an ordered \
-map, a non-hashing HashMap and a write-to-own-slot loop all pass."
+(key, value) pairs, one wrapped across lines, one hidden behind a lowercase \
+alias, one behind a generic alias, one behind a nested generic application, \
+one behind a path-qualified alias use, one behind a visibility-qualified \
+alias, one behind a path-qualified visibility, one shadowed inside a \
+module, one whose scope is protected from comment/string braces and one \
+protected from a char-literal brace are all rejected; an ordered map, a \
+non-hashing HashMap and a write-to-own-slot loop all pass."
 }
 
 if [ "${1:-}" = "--self-test" ]; then
