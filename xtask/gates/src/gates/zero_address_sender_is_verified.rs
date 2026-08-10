@@ -230,11 +230,7 @@ fn judge(src: &str) -> Vec<String> {
             // A success inside a closure (`|| { Ok(()) }`) or helper within
             // the verify block does not guard the outer path; exclude it
             // (Strix CWE-697, round 8 finding: nested helper decoys).
-            let verify_no_closure = !verify_block.contains("= ||")
-                && !verify_block.contains("| record |")
-                && !verify_block.contains("|r|")
-                && !verify_block.contains("move |")
-                && !verify_block.contains("|_|");
+            let verify_no_closure = !verify_block.contains("||") && !verify_block.contains("| ");
             let ok_in_verify = verify_no_closure && ok_success_in(verify_block);
             let ok_before = ok_success_in(&block[..verify_start]);
             let ok_after = ok_success_in(&verify_rest[verify_end..]);
