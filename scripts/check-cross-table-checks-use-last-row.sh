@@ -220,7 +220,7 @@ for column, table in SIDE_TABLE_ACCUMULATORS:
     #   3. line comments last - after literals and blocks are gone, a `//`
     #      can only be a real line comment.
     scrubbed = strip_rust_literals(src)
-    scrubbed = strip_block_comments(scrubbed)
+    scrubbed = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group(0).count('\n'), scrubbed, flags=re.DOTALL)  # MUTATION: flat
     scrubbed = re.sub(
         r'//[^\n]*',
         lambda m: "\n" * m.group(0).count("\n"),
