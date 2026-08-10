@@ -65,7 +65,7 @@ scan() {
       # case-insensitive so `SHA256`/`.SHA512` variants are caught as well
       # (Strix MEDIUM, CWE-184, deneme round 3 PR #272; uppercase
       # extensions: PR #149 follow-up).
-      if printf '%s' "$line" | grep -qiE 'https?://[^[:space:]]+\.(sha256|sha512|sha1|md5|checksum|checksums)([[:space:]]|$|\\)' \
+      if printf '%s' "$line" | grep -qE 'https?://[^[:space:]]+\.(sha256|sha512|sha1|md5|checksum|checksums)([[:space:]]|$|\\)' \
         || printf '%s' "$line" | grep -qiE 'https?://[^[:space:]]*/(hash|checksum|checksums|sums?)([[:space:]]|$|\\)' \
         || printf '%s' "$line" | grep -qiE 'https?://[^[:space:]]*[?&](hash|checksum|checksums|sums?)[=]'; then
         offenders+=("$(basename "$f"):$n")
