@@ -184,9 +184,13 @@ fn judge(src: &str) -> Vec<String> {
         Some(&rest[..end])
     });
     if let Some(block) = zero_guard {
-        // `return Ok(())` must be nested INSIDE the `if tx.verify() { .. }`
-        // block; a misnested branch (`if tx.verify() { } return Ok(());`)
-        // still bypasses (Strix CWE-697).
+        // The zero-address success must be nested INSIDE the
+        // `if tx.verify() { .. }` block. Any `Ok(())` (with or without
+        // `return`) outside that block, including after a failed verify
+        // (`if !tx.verify() { return Ok(()); }`) or as a tail expression
+        // (`if tx.verify() { Ok(()) }`), is an unguarded success (Strix
+        // CWE-697, round 5 finding).
+        let has_ok_success = block.contains("Ok(())");
         let guarded_success = block.find("if tx.verify() {").is_some_and(|verify_start| {
             let verify_rest = &block[verify_start..];
             let mut verify_depth = 0i32;
@@ -205,13 +209,17 @@ fn judge(src: &str) -> Vec<String> {
                 }
             }
             let verify_block = &verify_rest[..verify_end];
-            verify_block.contains("return Ok(());")
-                && !block[..verify_start].contains("return Ok(());")
-                && !verify_rest[verify_end..].contains("return Ok(());")
+            let ok_in_verify = verify_block.contains("Ok(())");
+            let ok_before = block[..verify_start].contains("Ok(())");
+            let ok_after = verify_rest[verify_end..].contains("Ok(())");
+            // Also: an `if !tx.verify() { Ok(()) }` guard would put the
+            // success in a *failed-verify* branch - reject it by requiring
+            // there be no `Ok(())` before the positive verify block.
+            ok_in_verify && !ok_before && !ok_after
         });
-        if block.contains("return Ok(());") && !guarded_success {
+        if has_ok_success && !guarded_success {
             problems.push(String::from(
-                "account.rs has regressed to an effectively unguarded zero-address return Ok(()). The success return must be nested inside the tx.verify() branch.",
+                "account.rs has regressed to an unguarded zero-address success. Ok(()) must be nested inside the positive tx.verify() branch; a failed-verify or tail success reopens the CWE-306 bypass.",
             ));
         }
     } else {
@@ -268,7 +276,7 @@ pub fn self_test() -> Result<String, String> {
     let dead = "pub fn validate_transaction_with_context(\n        &self,\n        tx: &Transaction,\n    ) -> Result<(), String> {\n    if tx.from == Address::zero() {\n        let _unused = tx.verify();\n        return Ok(());\n    }\n}\n";
     if !judge(dead)
         .iter()
-        .any(|p| p.contains("effectively unguarded"))
+        .any(|p| p.contains("effectively unguarded") || p.contains("unguarded zero-address"))
     {
         problems.push(String::from(
             "VACUOUS: a dead tx.verify() plus unconditional zero-address success was accepted.",

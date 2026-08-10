@@ -150,10 +150,32 @@ fn read_all(root: &Path) -> Result<String, String> {
 fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
     // Strip comments and string/raw-string literals first so a decoy
     // `sign_with_privacy` inside dead text cannot anchor the check (Strix
-    // CWE-697). Offsets are preserved by the strip (it only blanks).
+    // CWE-697). Anchor to the `impl Wallet { .. }` block so an earlier live
+    // helper with the same signature cannot steal the anchor (Strix CWE-697,
+    // round 5 finding), and require the attestation RESULT to be used, so an
+    // inert `verify_quote` call that does not drive the decision is rejected.
     let clean = strip_rust_noise(src);
-    let sign_with_privacy_block = clean.find("pub fn sign_with_privacy(").and_then(|start| {
-        let body = &clean[start..];
+    let sign_with_privacy_block = clean.find("impl Wallet {").and_then(|impl_start| {
+        let impl_src = &clean[impl_start..];
+        let impl_open = impl_src.find('{')?;
+        let mut impl_depth = 0usize;
+        let mut impl_end = None;
+        for (idx, ch) in impl_src[impl_open..].char_indices() {
+            match ch {
+                '{' => impl_depth += 1,
+                '}' => {
+                    impl_depth = impl_depth.saturating_sub(1);
+                    if impl_depth == 0 {
+                        impl_end = Some(impl_open + idx);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let wallet_impl = &impl_src[..=impl_end?];
+        let method_start = wallet_impl.find("pub fn sign_with_privacy(")?;
+        let body = &wallet_impl[method_start..];
         let open = body.find('{')?;
         let mut depth = 0usize;
         for (idx, ch) in body[open..].char_indices() {
@@ -173,13 +195,17 @@ fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
     let live_verifier_call = match sign_with_privacy_block {
         Some(body) => {
             body.contains("verifier: &dyn TeeQuoteVerifier")
-                && body.contains("verifier.verify_quote(&quote)")
+                && (body.contains("let attestation = verifier.verify_quote(&quote)")
+                    || body.contains("let attestation=verifier.verify_quote(&quote)"))
+                && body.contains("attestation.verify_measurement(")
+                && body.contains("attestation.backend")
+                && body.contains("attestation.verify_report_data(")
         }
         None => false,
     };
     if !live_verifier_call {
         problems.push(String::from(
-            "sign_with_privacy no longer enforces the wallet-owned quote verification step before trusting attestation fields. Without the live verifier call inside sign_with_privacy, the runtime can reclaim attestation control.",
+            "sign_with_privacy no longer enforces the wallet-owned quote verification step before trusting attestation fields. The attestation result must be produced by verifier.verify_quote and actually used (measurement, backend, report_data checks); without it the runtime can reclaim attestation control.",
         ));
     }
 }
@@ -314,7 +340,16 @@ pub fn self_test() -> Result<String, String> {
 trait TeeQuoter: TeeRuntime { fn quote(&self, d: [u8; 32]) -> Result<Vec<u8>, WalletError>; }
 trait TeeQuoteVerifier { fn verify_quote(&self, q: &[u8]) -> Result<TeeAttestation, WalletError>; }
 pub struct UnavailableTeeQuoteVerifier;
-pub fn sign_with_privacy(&self, message: &[u8], runtime: &dyn TeeQuoter, verifier: &dyn TeeQuoteVerifier) -> Result<[u8; 64], WalletError> { let quote = runtime.quote([0u8; 32]).unwrap(); let attestation = verifier.verify_quote(&quote).unwrap(); let _ = attestation; }
+impl Wallet {
+    pub fn sign_with_privacy(&self, message: &[u8], runtime: &dyn TeeQuoter, verifier: &dyn TeeQuoteVerifier) -> Result<[u8; 64], WalletError> {
+        let quote = runtime.quote([0u8; 32]).unwrap();
+        let attestation = verifier.verify_quote(&quote).unwrap();
+        if !attestation.verify_measurement(&[0u8; 32]) { return Err(WalletError::TeeUnavailable(\"x\".into())); }
+        if attestation.backend != TeeBackendKind::ClientSgx { return Err(WalletError::TeeUnavailable(\"x\".into())); }
+        if !attestation.verify_report_data(&[0u8; 32]) { return Err(WalletError::TeeUnavailable(\"x\".into())); }
+        Ok([0u8; 64])
+    }
+}
 ";
     if !judge(good).is_empty() {
         problems.push(String::from(
