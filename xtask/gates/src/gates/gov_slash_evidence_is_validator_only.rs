@@ -224,23 +224,56 @@ fn judge(src: &str) -> Vec<String> {
     // inert `if` bodies).
     let digest_cmp = "sha2::Sha256::digest(&bytes).as_slice() == evidence_hash";
     let guard_str = format!("if {digest_cmp} {{");
-    let guarded_form = block.contains(&guard_str)
-        && block.contains("return true;")
-        && block
-            .find(&guard_str)
-            .and_then(|guard_start| {
-                block[guard_start..]
-                    .find("return true;")
-                    .map(|ret| guard_start + ret)
-            })
-            .is_some_and(|guarded_return| {
-                !block[guarded_return + "return true;".len()..].contains("return true;")
-            });
+    // The guarded `return true` must be inside the digest-guard block AND not
+    // inside a closure (`|| { return true; }`) or nested helper; a closure
+    // decoy does not control the slash decision (Strix CWE-697, round 6).
+    let guarded_form = block.find(&guard_str).is_some_and(|guard_start| {
+        let guard_rest = &block[guard_start..];
+        let open = guard_rest.find('{').unwrap_or(0);
+        let mut depth = 0i32;
+        let mut guard_end = None;
+        for (offset, ch) in guard_rest[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        guard_end = Some(open + offset + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        guard_end.is_some_and(|end| {
+            let body = &guard_rest[..end];
+            let after = &guard_rest[end..];
+            let closure_ret = body.contains("= ||") || body.contains("= |");
+            let empty_body = body.trim_end().ends_with('{')
+                || body.trim().ends_with("{ //")
+                || body.trim().ends_with("{ /*");
+            body.contains("return true;")
+                && !after.contains("return true;")
+                && !closure_ret
+                && !empty_body
+        })
+    });
+    // tail_form: the digest comparison must be the closure's last expression,
+    // not a bare mention followed by more statements.
+    // tail_form: the digest comparison is the closure's last expression when
+    // it appears inside `.any(|..| { .. })` with no `let` binding of it and no
+    // separate `return true;`. A trailing `});` contains a `;` but is the
+    // closure close, not another statement after the comparison.
     let tail_form = block.contains(digest_cmp)
         && !block
             .lines()
             .any(|l| l.contains("let ") && l.contains("== evidence_hash"))
-        && !block.contains("return true;");
+        && !block.contains("return true;")
+        && block.contains(".any(|")
+        && block.rfind(digest_cmp).is_some_and(|cmp_at| {
+            let after = block[cmp_at + digest_cmp.len()..].trim_start();
+            !after.starts_with(';') && !after.starts_with(") ;")
+        });
     if !guarded_form && !tail_form {
         problems.push(String::from(
             "account.rs no longer drives the slash success with the digest comparison. The evidence check must either guard the success with a non-inert body (`if digest == evidence_hash { return true; }`) or be the closure's tail expression; a cosmetic binding or inert if body is insufficient.",
