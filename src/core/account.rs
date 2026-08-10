@@ -1043,12 +1043,7 @@ impl AccountState {
         spendable_balance: u64,
     ) -> Result<(), String> {
         if tx.from == Address::zero() {
-            if tx.verify() {
-                return Ok(());
-            }
-            return Err(
-                "zero-address sender is only valid for the canonical genesis transaction".into(),
-            );
+            return Ok(()); // MUTATION: genesis disi zero-address tx gecer (CWE-306 acik)
         }
         if self.burn_reserve_address == Some(tx.from) {
             return Err(
