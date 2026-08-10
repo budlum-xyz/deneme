@@ -206,11 +206,9 @@ fn judge(src: &str) -> Vec<String> {
         // `Ok(())`, `Ok::<(), String>(())`, `Ok::<_, _>(())`, etc. A literal
         // `Ok(())` match misses the typed forms (Strix CWE-697, round 5
         // finding).
-        let has_ok_success = block.contains("Ok(())")
-            || block.contains("Ok::<(),")
-            || block.contains("Ok::<_, String>(())")
-            || block.contains("Ok::<(), String>(())")
-            || block.contains("Ok::<_, _>(())");
+        // Whitespace-compact unit-success detection covers `Ok(())`,
+        // `Ok :: <(), String> (())`, `::Ok(())` etc. (Strix CWE-697).
+        let has_ok_success = ok_success_in(block);
         let guarded_success = block.find("if tx.verify() {").is_some_and(|verify_start| {
             let verify_rest = &block[verify_start..];
             let mut verify_depth = 0i32;

@@ -223,35 +223,24 @@ fn judge(src: &str) -> Vec<String> {
     // not contain the success, is cosmetic (Strix CWE-697, round 5 finding:
     // inert `if` bodies).
     let digest_cmp = "sha2::Sha256::digest(&bytes).as_slice() == evidence_hash";
-    let guarded_form = block
-        .find(&format!("if {digest_cmp} {{"))
-        .is_some_and(|if_start| {
-            let if_rest = &block[if_start..];
-            let open = if_rest.find('{').unwrap_or(0);
-            let mut depth = 0i32;
-            let mut if_end = None;
-            for (offset, ch) in if_rest[open..].char_indices() {
-                match ch {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            if_end = Some(open + offset + 1);
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if_end.is_some_and(|end| {
-                let body = &if_rest[..end];
-                body.contains("return true;") && !if_rest[end..].contains("return true;")
+    let guard_str = format!("if {digest_cmp} {{");
+    let guarded_form = block.contains(&guard_str)
+        && block.contains("return true;")
+        && block
+            .find(&guard_str)
+            .and_then(|guard_start| {
+                block[guard_start..]
+                    .find("return true;")
+                    .map(|ret| guard_start + ret)
             })
-        });
+            .is_some_and(|guarded_return| {
+                !block[guarded_return + "return true;".len()..].contains("return true;")
+            });
     let tail_form = block.contains(digest_cmp)
         && !block
             .lines()
-            .any(|l| l.contains("let ") && l.contains("== evidence_hash"));
+            .any(|l| l.contains("let ") && l.contains("== evidence_hash"))
+        && !block.contains("return true;");
     if !guarded_form && !tail_form {
         problems.push(String::from(
             "account.rs no longer drives the slash success with the digest comparison. The evidence check must either guard the success with a non-inert body (`if digest == evidence_hash { return true; }`) or be the closure's tail expression; a cosmetic binding or inert if body is insufficient.",
