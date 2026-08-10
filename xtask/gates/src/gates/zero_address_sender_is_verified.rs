@@ -133,15 +133,16 @@ fn collect(root: &Path) -> Result<String, String> {
     std::fs::read_to_string(&p).map_err(|e| format!("cannot read {}: {e}", p.display()))
 }
 
-/// True if `text` contains any unit-`Ok` success form: `Ok(())` or a typed
-/// `Ok::<T, E>(())` variant. Literal matching misses the typed forms (Strix
-/// CWE-697, round 5 finding).
+/// True if `text` contains any unit-`Ok` success form: `Ok(())`, a path
+/// `::Ok(())`, or a typed `Ok::<T, E>(())` variant, whitespace-tolerant.
+/// Literal matching misses typed or spaced forms (Strix CWE-697, round 5
+/// finding).
 fn ok_success_in(text: &str) -> bool {
-    text.contains("Ok(())")
-        || text.contains("Ok::<(),")
-        || text.contains("Ok::<_, String>(())")
-        || text.contains("Ok::<(), String>(())")
-        || text.contains("Ok::<_, _>(())")
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("Ok(())")
+        || compact.contains("::Ok(())")
+        || (compact.contains("Ok::<") && compact.contains(">(())"))
+        || (compact.contains("::Ok::<") && compact.contains(">(())"))
 }
 
 fn judge(src: &str) -> Vec<String> {
