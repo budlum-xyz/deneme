@@ -79,16 +79,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /usr/local/bin/budlum-core /usr/local/bin/budlum-core
 
-RUN useradd --create-home --shell /bin/bash budlum
+# Hadolint DL3066: non-numeric user-id. Kullanıcı deterministik UID 1000 ile
+# oluşturulur ve `USER 1000` numeric form kullanır, böylece host tarafında
+# çözümlenebilir (Güvenlik Planı §3: runtime kullanıcısı root değildir).
+RUN useradd --create-home --shell /bin/bash --uid 1000 budlum
 
 # Multi-node compose mount-point'leri (devnet-multinode-smoke): named volume
 # ilk mount'ta imaj dizin sahipliğini devralır - önceden budlum sahipli
-# oluşturulmazsa container (USER budlum) storage init'te EACCES alır ve
+# oluşturulmazsa container (USER 1000) storage init'te EACCES alır ve
 # restart-loop'a düşer (ilk CI koşusunda yakalanan defo, 2026-07-18).
 RUN mkdir -p /home/budlum/data /home/budlum/secrets \
-    && chown -R budlum:budlum /home/budlum
+    && chown -R 1000:1000 /home/budlum
 
-USER budlum
+USER 1000
 WORKDIR /home/budlum
 
 # Expose default ports
@@ -98,8 +101,10 @@ EXPOSE 4001 8545 8546 9090
 # HEALTHCHECK (Güvenlik Planı §3.7): RPC portunun dinlendiğini doğrular.
 # `curl`, bu meşru sağlık-kontrolü kullanımı için runtime imajında tutuldu.
 # Konteyner ayakta ama RPC yanıt vermiyorsa unhealthy işaretlenir.
+# JSON form (hadolint DL3025): `curl -f` zaten fail-mode'dur - başarısız
+# bağlantıda exit 1 döner, healthcheck'in healthy/unhealthy kararını verir.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:8545/ || exit 1
+  CMD ["curl", "-f", "http://localhost:8545/"]
 
 ENV RUST_LOG=info
 
