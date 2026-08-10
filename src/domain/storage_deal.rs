@@ -1726,7 +1726,9 @@ impl StorageRegistry {
             // held before challenge proofs existed; slashing on it would take
             // bonds from operators doing their job. See
             // `storage_challenge_proofs_are_checkable`.
-            (Some(_), Some(_)) if !Self::storage_challenge_proofs_are_checkable() => Ok(()),
+            (Some(_), Some(_)) if !Self::storage_challenge_proofs_are_checkable() => Err(
+                StorageError::InvalidMerkleProof("MUTATION: durust operator slash olur".into()),
+            ),
             (Some(root), Some(proof)) => {
                 let context = StorageChallengeProofContext::from_registry(
                     chain_id,
