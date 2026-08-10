@@ -194,12 +194,28 @@ fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
     });
     let live_verifier_call = match sign_with_privacy_block {
         Some(body) => {
+            // Attestation checks must actually GATE the flow. A no-op binding
+            // (`let _ = attestation.verify_measurement(..)`) satisfies a bare
+            // substring check but lets the function continue to Ok(..)
+            // regardless (Strix CWE-697, round 5 finding).
+            let inert_measurement = body.contains("let _ = attestation.verify_measurement(")
+                || body.contains("let _unused = attestation.verify_measurement(")
+                || body.contains("let _keep_gate_happy = attestation.verify_measurement(");
+            let inert_backend = body.contains("let _ = attestation.backend")
+                || body.contains("let _unused = attestation.backend")
+                || body.contains("let _keep_gate_happy = attestation.backend");
+            let inert_report = body.contains("let _ = attestation.verify_report_data(")
+                || body.contains("let _unused = attestation.verify_report_data(")
+                || body.contains("let _keep_gate_happy = attestation.verify_report_data(");
             body.contains("verifier: &dyn TeeQuoteVerifier")
                 && (body.contains("let attestation = verifier.verify_quote(&quote)")
                     || body.contains("let attestation=verifier.verify_quote(&quote)"))
                 && body.contains("attestation.verify_measurement(")
                 && body.contains("attestation.backend")
                 && body.contains("attestation.verify_report_data(")
+                && !inert_measurement
+                && !inert_backend
+                && !inert_report
         }
         None => false,
     };

@@ -190,7 +190,15 @@ fn judge(src: &str) -> Vec<String> {
         // (`if !tx.verify() { return Ok(()); }`) or as a tail expression
         // (`if tx.verify() { Ok(()) }`), is an unguarded success (Strix
         // CWE-697, round 5 finding).
-        let has_ok_success = block.contains("Ok(())");
+        // Success is any `Ok` expression whose payload is the unit type:
+        // `Ok(())`, `Ok::<(), String>(())`, `Ok::<_, _>(())`, etc. A literal
+        // `Ok(())` match misses the typed forms (Strix CWE-697, round 5
+        // finding).
+        let has_ok_success = block.contains("Ok(())")
+            || block.contains("Ok::<(),")
+            || block.contains("Ok::<_, String>(())")
+            || block.contains("Ok::<(), String>(())")
+            || block.contains("Ok::<_, _>(())");
         let guarded_success = block.find("if tx.verify() {").is_some_and(|verify_start| {
             let verify_rest = &block[verify_start..];
             let mut verify_depth = 0i32;
