@@ -1137,8 +1137,8 @@ jobs:
       # loss tolerance of two on an object that survives nothing.
       - name: guvenilmeyen manifest tam denetleniyor mu + kanarya
         run: |
-          bash ./scripts/check-untrusted-manifests-are-fully-validated.sh --self-test
-          bash ./scripts/check-untrusted-manifests-are-fully-validated.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- untrusted-manifests-are-fully-validated --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- untrusted-manifests-are-fully-validated
           bash ./scripts/check-evidence-provenance-is-checked.sh --self-test
           bash ./scripts/check-evidence-provenance-is-checked.sh
           bash ./scripts/check-every-opcode-has-a-forgery-test.sh --self-test
@@ -1210,8 +1210,8 @@ jobs:
       # deal that charged the same for 1 KiB and 16 MiB.
       - name: deger transferleri degere gore mi fiyatlaniyor + kanarya
         run: |
-          bash ./scripts/check-value-transfers-are-priced-by-value.sh --self-test
-          bash ./scripts/check-value-transfers-are-priced-by-value.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- value-transfers-are-priced-by-value --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- value-transfers-are-priced-by-value
       # `cargo test --workspace` says every test that ran passed; it says
       # nothing about which tests exist. The forgery tests are the only
       # evidence the AIR constrains anything, and one deleted in a refactor

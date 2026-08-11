@@ -54,6 +54,8 @@ mod gates {
     pub mod suppressions_are_justified;
     pub mod tee_trust_boundary_is_structural;
     pub mod the_image_builds_what_the_manifest_declares;
+    pub mod untrusted_manifests;
+    pub mod value_transfers;
     pub mod wire_fields_are_signed;
     pub mod workflows_produce_jobs;
     pub mod zero_address_sender_is_verified;
@@ -154,6 +156,18 @@ const GATES: &[Gate] = &[
         replaces: None,
         run: gates::no_new_shell_gates::run,
         self_test: gates::no_new_shell_gates::self_test,
+    },
+    Gate {
+        name: "untrusted-manifests-are-fully-validated",
+        replaces: Some("check-untrusted-manifests-are-fully-validated.sh"),
+        run: gates::untrusted_manifests::run,
+        self_test: gates::untrusted_manifests::self_test,
+    },
+    Gate {
+        name: "value-transfers-are-priced-by-value",
+        replaces: Some("check-value-transfers-are-priced-by-value.sh"),
+        run: gates::value_transfers::run,
+        self_test: gates::value_transfers::self_test,
     },
     Gate {
         name: "zero-address-sender-verified",
