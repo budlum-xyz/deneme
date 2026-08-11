@@ -380,9 +380,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Gate self-test (canary)
-        run: bash ./scripts/check-domain-tags.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- domain-tag-gate --self-test
       - name: Inventory matches code
-        run: bash ./scripts/check-domain-tags.sh .
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- domain-tag-gate
 
   poa-compliance-gate:
     # : MASAK/AML hooks are isolated to PoA domains only.
@@ -480,11 +480,11 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Kapi kanaryasi (vacuous degil kaniti)
-        run: bash ./scripts/check-bns-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- bns-gate --self-test
       - name: bns - 8 test (isim kanaryali)
         run: |
           cargo test --lib bns 2>&1 | tee /tmp/bns-gate.txt
-          bash ./scripts/check-bns-gate.sh /tmp/bns-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- bns-gate /tmp/bns-gate.txt
 
   # ============================  /  (P0) ============================
   # Strict mod: aşağıdaki tüm job'lar ilk günden FAIL kapısıdır (ruhu).

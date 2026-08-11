@@ -40,12 +40,15 @@
 use std::path::{Path, PathBuf};
 
 mod gates {
+    pub mod bns_gate;
     pub mod bns_names_are_safe_in_an_address_bar;
     pub mod capability_modules_are_wired;
     pub mod coding_audit_samples_the_relationship;
     pub mod content_encryption_is_declared_and_bound;
+    pub mod domain_tags;
     pub mod economy_invariants;
     pub mod every_fuzz_target_is_run;
+    pub mod exact_named_tests;
     pub mod fork_choice_gate;
     pub mod gov_slash_evidence_is_validator_only;
     pub mod governance_invariants;
@@ -126,12 +129,32 @@ const GATES: &[Gate] = &[
         self_test: gates::mermaid::self_test,
     },
     Gate {
+        name: "bns-gate",
+        replaces: Some("check-bns-gate.sh"),
+        run: |_| {
+            Err(String::from(
+                "bns-gate reads a cargo test log; pass its path as an argument",
+            ))
+        },
+        run_log: Some(gates::bns_gate::run),
+        run_args: None,
+        self_test: gates::bns_gate::self_test,
+    },
+    Gate {
         name: "bns-names",
         replaces: None,
         run: gates::bns_names_are_safe_in_an_address_bar::run,
         run_log: None,
         run_args: None,
         self_test: gates::bns_names_are_safe_in_an_address_bar::self_test,
+    },
+    Gate {
+        name: "domain-tag-gate",
+        replaces: Some("check-domain-tags.sh"),
+        run: gates::domain_tags::run,
+        run_log: None,
+        run_args: None,
+        self_test: gates::domain_tags::self_test,
     },
     Gate {
         name: "security-scans-can-fail",
