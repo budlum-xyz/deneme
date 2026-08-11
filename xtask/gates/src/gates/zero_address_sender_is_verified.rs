@@ -150,6 +150,15 @@ fn ok_success_in(text: &str) -> bool {
         || (compact.contains("::Ok::<") && compact.contains(">(())"))
 }
 
+/// Does the code after the positive `tx.verify()` block fail closed? Only a
+/// leading `return Err(` / `Err(` counts. Anything else - a helper call, a
+/// tail `true`, a tail `Ok` - is an unguarded success path that reopens the
+/// zero-address bypass even when a decoy `Ok(())` sits inside the verified
+/// branch (Strix CWE-697, round 5/6/7 findings).
+fn fail_closes_after_verify(text: &str) -> bool {
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.starts_with("returnErr(") || compact.starts_with("Err(")
+}
 fn judge(src: &str) -> Vec<String> {
     let mut problems = Vec::new();
 
@@ -238,11 +247,16 @@ fn judge(src: &str) -> Vec<String> {
             let verify_no_closure = !verify_block.contains("||") && !verify_block.contains("| ");
             let ok_in_verify = verify_no_closure && ok_success_in(verify_block);
             let ok_before = ok_success_in(&block[..verify_start]);
-            let ok_after = ok_success_in(&verify_rest[verify_end..]);
-            // Also: an `if !tx.verify() { Ok(()) }` guard would put the
-            // success in a *failed-verify* branch - reject it by requiring
-            // there be no success before the positive verify block.
-            ok_in_verify && !ok_before && !ok_after
+            let after = &verify_rest[verify_end..];
+            // The tail must fail closed. A success after the verified branch
+            // - whether an `Ok(())`, a helper call, or a bare tail `true` -
+            // reopens the bypass even when a decoy `Ok(())` sits inside the
+            // branch; only `return Err(` / `Err(` is a real close (Strix
+            // CWE-697, round 5/6/7 findings). An `Ok(())` after the verify
+            // block is likewise rejected (round 8 finding).
+            let after_fails_closed = fail_closes_after_verify(after);
+            let ok_after = ok_success_in(after);
+            ok_in_verify && !ok_before && !ok_after && after_fails_closed
         });
         if has_ok_success && !guarded_success {
             problems.push(String::from(
@@ -314,6 +328,30 @@ pub fn self_test() -> Result<String, String> {
     if !judge(misnested).iter().any(|p| p.contains("nested inside")) {
         problems.push(String::from(
             "VACUOUS: a misnested tx.verify() branch was accepted.",
+        ));
+    }
+
+    // A decoy `Ok(())` inside the verified branch with a tail success after
+    // it must fail (Strix CWE-697, round 6/7 finding).
+    let decoy_tail = "pub fn validate_transaction_with_context(\n        &self,\n        tx: &Transaction,\n    ) -> Result<(), String> {\n    if tx.from == Address::zero() {\n        if tx.verify() {\n            Ok::<_, _>(())\n        }\n        true\n    }\n}\n";
+    if !judge(decoy_tail)
+        .iter()
+        .any(|p| p.contains("unguarded zero-address"))
+    {
+        problems.push(String::from(
+            "VACUOUS: a decoy Ok inside the verified branch plus a tail success was accepted.",
+        ));
+    }
+
+    // A helper-call success after the verified branch must fail too (Strix
+    // CWE-697, round 6/7 finding).
+    let decoy_helper = "pub fn validate_transaction_with_context(\n        &self,\n        tx: &Transaction,\n    ) -> Result<(), String> {\n    if tx.from == Address::zero() {\n        if tx.verify() {\n            return Ok(());\n        }\n        self.accept_zero_address()\n    }\n}\n";
+    if !judge(decoy_helper)
+        .iter()
+        .any(|p| p.contains("unguarded zero-address"))
+    {
+        problems.push(String::from(
+            "VACUOUS: a helper success after the verified branch was accepted.",
         ));
     }
 

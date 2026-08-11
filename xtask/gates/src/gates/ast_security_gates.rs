@@ -311,7 +311,7 @@ fn judge_file(src: &str, checks: Checks) -> Vec<String> {
     };
 
     if checks.zero_address {
-        let mut inner = ZeroAddressVisitor::new();
+        let inner = ZeroAddressVisitor::new();
         let mut za = ZeroAddressBranch { inner };
         za.visit_file(&ast);
         if !za.inner.ok_inside_verify {

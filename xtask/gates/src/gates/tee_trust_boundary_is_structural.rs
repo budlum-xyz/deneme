@@ -147,6 +147,82 @@ fn read_all(root: &Path) -> Result<String, String> {
 /// `sign_with_privacy` must take the verifier AND call it inside its own
 /// body; a call elsewhere in the file does not count (Strix CWE-697: tee.rs
 /// test helpers already call `verify_quote`).
+/// Does the attestation predicate at `needle` appear in a guard that returns
+/// an error from `sign_with_privacy`?
+///
+/// Only a top-level `return Err(..)` in the guard body fails the outer
+/// function closed. A `return Err` nested inside a closure passed as an
+/// argument (`move |_| { return Err(..); }`), a named closure binding
+/// (`let f = || { return Err(..); }`) or a nested block
+/// (`if false { return Err(..); }`) is a decoy that leaves the outer
+/// attestation check fail-open (Strix CWE-697, round 5/6/7 findings). Track
+/// brace depth line by line and accept only a depth-0 `return Err`.
+fn has_rejecting_guard(body: &str, needle: &str) -> bool {
+    body.find(needle).is_some_and(|guard_start| {
+        let guard = &body[guard_start..];
+        match guard.find('{') {
+            Some(open) => {
+                let mut depth = 0usize;
+                let mut guarded = false;
+                for (idx, ch) in guard[open..].char_indices() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                let guard_body = &guard[open + 1..open + idx];
+                                let mut nested_depth = 0usize;
+                                let mut top_level_return_err = false;
+                                for line in guard_body.lines() {
+                                    let trimmed = line.trim();
+                                    if nested_depth == 0
+                                        && (trimmed.starts_with("return Err(")
+                                            || trimmed.starts_with("return Err ("))
+                                    {
+                                        top_level_return_err = true;
+                                        break;
+                                    }
+                                    for c in trimmed.chars() {
+                                        match c {
+                                            '{' => nested_depth += 1,
+                                            '}' => {
+                                                nested_depth = nested_depth.saturating_sub(1);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                // Round 5/6/10 hardening kept from the
+                                // bulgular branch: a closure/nested-fn decoy
+                                // (`||`, `| `, `fn `) or a nested conditional
+                                // (a `return Err` appearing after a nested
+                                // `if` opener) must not satisfy the
+                                // rejecting-guard check even if the line walk
+                                // above could be fooled by brace layout.
+                                let closure_decoy = guard_body.contains("||")
+                                    || guard_body.contains("| ")
+                                    || guard_body.contains("fn ");
+                                let first_err = guard_body.find("return Err");
+                                let first_if = guard_body.find("if ");
+                                let nested_conditional = match (first_err, first_if) {
+                                    (Some(e), Some(f)) => f < e,
+                                    _ => false,
+                                };
+                                guarded =
+                                    top_level_return_err && !closure_decoy && !nested_conditional;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                guarded
+            }
+            None => false,
+        }
+    })
+}
+
 fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
     // Strip comments and string/raw-string literals first so a decoy
     // `sign_with_privacy` inside dead text cannot anchor the check (Strix
@@ -199,75 +275,11 @@ fn check_live_verifier_call(src: &str, problems: &mut Vec<String>) {
             // insufficient: `let measurement_ok = attestation.verify_measurement(..)`
             // still leaves an unconditional success path (Strix CWE-697,
             // round 5 finding: fail-open branches).
-            let has_rejecting_guard = |needle: &str| {
-                body.find(needle).is_some_and(|guard_start| {
-                    let guard = &body[guard_start..];
-                    match guard.find('{') {
-                        Some(open) => {
-                            let mut depth = 0usize;
-                            let mut guarded = false;
-                            for (idx, ch) in guard[open..].char_indices() {
-                                match ch {
-                                    '{' => depth += 1,
-                                    '}' => {
-                                        depth = depth.saturating_sub(1);
-                                        if depth == 0 {
-                                            let guard_body = guard[open + 1..open + idx].trim();
-                                            // A `return Err` nested inside a
-                                            // closure (`let _inner = || {
-                                            // return Err(..); };`) does not
-                                            // fail the outer function closed;
-                                            // reject closure-decoy guards
-                                            // (Strix CWE-697, round 5
-                                            // finding: nested return Err
-                                            // decoys).
-                                            // A `return Err` nested inside a
-                                            // closure (`|| { return Err(..); }`),
-                                            // a named closure binding
-                                            // (`let f = || { return Err(..); }`),
-                                            // or a nested block does not fail the
-                                            // outer function closed (Strix
-                                            // CWE-697, round 6 finding).
-                                            // `return Err` must be present in the
-                                            // guard body and NOT inside a closure or
-                                            // nested fn (which would be a decoy).
-                                            // Ordinary `if { .. }` bodies are fine:
-                                            // the guard itself is an if.
-                                            let has_err = guard_body.contains("return Err(")
-                                                || guard_body.contains("return Err (");
-                                            let closure_decoy = guard_body.contains("||")
-                                                || guard_body.contains("| ")
-                                                || guard_body.contains("fn ");
-                                            // A `return Err` nested inside a
-                                            // conditional (`if .. { return Err(..); }`)
-                                            // that is itself inside the guard is a
-                                            // decoy if a success path remains; require
-                                            // the FIRST `return Err` to appear before
-                                            // any nested `if` opener (Strix CWE-697,
-                                            // round 10 finding: nested conditional).
-                                            let first_err = guard_body.find("return Err");
-                                            let first_if = guard_body.find("if ");
-                                            let nested_conditional = match (first_err, first_if) {
-                                                (Some(e), Some(f)) => f < e,
-                                                _ => false,
-                                            };
-                                            guarded =
-                                                has_err && !closure_decoy && !nested_conditional;
-                                            break;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            guarded
-                        }
-                        None => false,
-                    }
-                })
-            };
-            let measurement_gates_flow = has_rejecting_guard("if !attestation.verify_measurement(");
-            let backend_gates_flow = has_rejecting_guard("if attestation.backend !=");
-            let report_gates_flow = has_rejecting_guard("if !attestation.verify_report_data(");
+            let measurement_gates_flow =
+                has_rejecting_guard(body, "if !attestation.verify_measurement(");
+            let backend_gates_flow = has_rejecting_guard(body, "if attestation.backend !=");
+            let report_gates_flow =
+                has_rejecting_guard(body, "if !attestation.verify_report_data(");
             body.contains("verifier: &dyn TeeQuoteVerifier")
                 && (body.contains("let attestation = verifier.verify_quote(&quote)")
                     || body.contains("let attestation=verifier.verify_quote(&quote)"))
@@ -483,6 +495,18 @@ pub fn sign_with_privacy(&self, message: &[u8], runtime: &dyn TeeAttester) -> Re
     if decoy_problems.is_empty() {
         problems.push(String::from(
             "VACUOUS: a decoy sign_with_privacy in a comment anchored the verifier-call check.",
+        ));
+    }
+
+    // A `return Err` nested inside a closure argument or inner block must not
+    // satisfy the rejecting-guard check: the outer attestation check would
+    // stay fail-open (Strix CWE-697, round 7 finding).
+    let closure_decoy = "\nimpl Wallet {\n    pub fn sign_with_privacy(&self, message: &[u8], runtime: &dyn TeeQuoter, verifier: &dyn TeeQuoteVerifier) -> Result<[u8; 64], WalletError> {\n        let quote = runtime.quote([0u8; 32]).unwrap();\n        let attestation = verifier.verify_quote(&quote).unwrap();\n        if !attestation.verify_measurement(&[0u8; 32]) { let _d = move || { return Err(WalletError::TeeUnavailable(\"x\".into())); }; }\n        if attestation.backend != TeeBackendKind::ClientSgx { if false { return Err(WalletError::TeeUnavailable(\"x\".into())); } }\n        if !attestation.verify_report_data(&[0u8; 32]) { let _d = || { return Err(WalletError::TeeUnavailable(\"x\".into())); }; }\n        Ok([0u8; 64])\n    }\n}\n";
+    let mut closure_problems = Vec::new();
+    check_live_verifier_call(closure_decoy, &mut closure_problems);
+    if closure_problems.is_empty() {
+        problems.push(String::from(
+            "VACUOUS: nested-closure/nested-block return Err decoys satisfied the rejecting-guard check.",
         ));
     }
 
