@@ -49,11 +49,14 @@ mod gates {
     pub mod hash_inputs_are_length_prefixed;
     pub mod mermaid;
     pub mod no_new_shell_gates;
+    pub mod rust_literals;
     pub mod security_scans_can_fail;
     pub mod self_derived_ids_cover_every_field;
+    pub mod storage_proof_boundary;
     pub mod suppressions_are_justified;
     pub mod tee_trust_boundary_is_structural;
     pub mod the_image_builds_what_the_manifest_declares;
+    pub mod uncheckable_proof;
     pub mod wire_fields_are_signed;
     pub mod workflows_produce_jobs;
     pub mod zero_address_sender_is_verified;
@@ -154,6 +157,18 @@ const GATES: &[Gate] = &[
         replaces: None,
         run: gates::no_new_shell_gates::run,
         self_test: gates::no_new_shell_gates::self_test,
+    },
+    Gate {
+        name: "storage-proof-production-boundary",
+        replaces: Some("check-storage-proof-production-boundary.sh"),
+        run: gates::storage_proof_boundary::run,
+        self_test: gates::storage_proof_boundary::self_test,
+    },
+    Gate {
+        name: "uncheckable-proof-paths-do-not-slash",
+        replaces: Some("check-uncheckable-proof-paths-do-not-slash.sh"),
+        run: gates::uncheckable_proof::run,
+        self_test: gates::uncheckable_proof::self_test,
     },
     Gate {
         name: "zero-address-sender-verified",

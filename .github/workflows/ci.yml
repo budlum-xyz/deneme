@@ -305,9 +305,9 @@ jobs:
       # proved nothing about any commit. Wired here rather than into a new job
       # because it is source-only and needs no build.
       - name: Storage proof boundary canary
-        run: bash ./scripts/check-storage-proof-production-boundary.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-proof-production-boundary --self-test
       - name: Storage proof production boundary
-        run: bash ./scripts/check-storage-proof-production-boundary.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-proof-production-boundary
       - name:  StorageProvider tests
         run: |
           set -euo pipefail
@@ -1261,8 +1261,8 @@ jobs:
       # fire on a rejection the chain cannot justify.
       - name: kanitlanamayan yol ceza kesmesin + kanarya
         run: |
-          bash ./scripts/check-uncheckable-proof-paths-do-not-slash.sh --self-test
-          bash ./scripts/check-uncheckable-proof-paths-do-not-slash.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- uncheckable-proof-paths-do-not-slash --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- uncheckable-proof-paths-do-not-slash
       # B35: the fixed-point slash expression was written out at five call
       # sites across two workspaces, and the narrowing was not spelled the same
       # way in all of them. `as u64` truncated where the Kani mirror panicked,
