@@ -40,6 +40,7 @@
 use std::path::{Path, PathBuf};
 
 mod gates {
+    pub mod ast_security_gates;
     pub mod bns_names_are_safe_in_an_address_bar;
     pub mod capability_modules_are_wired;
     pub mod coding_audit_samples_the_relationship;
@@ -154,6 +155,12 @@ const GATES: &[Gate] = &[
         replaces: None,
         run: gates::no_new_shell_gates::run,
         self_test: gates::no_new_shell_gates::self_test,
+    },
+    Gate {
+        name: "ast-security-gates",
+        replaces: None,
+        run: gates::ast_security_gates::run,
+        self_test: gates::ast_security_gates::self_test,
     },
     Gate {
         name: "zero-address-sender-verified",

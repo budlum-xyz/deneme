@@ -12,6 +12,11 @@ publish = false
 # boundary. The standard library is enough for reading files and matching
 # text, which is all a gate does.
 [dependencies]
+# Round 5: syn (gercek Rust parser) tabanli AST security gate. Sifir
+# bagimlilik ilkesi bilincli olarak degisti (belgeli): parser dogrulugunun
+# gate bagimlilik genisliginden onemli oldugu kabul edildi.
+syn = { version = "2", features = ["full", "visit", "printing", "derive", "parsing"] }
+quote = "1"
 
 [lints.rust]
 unsafe_code = "forbid"
