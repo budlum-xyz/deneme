@@ -44,6 +44,50 @@ fn generator_variants(code: &str) -> Vec<String> {
 ///
 /// Returns a finding when a generator is under-pinned or the digests are not
 /// 64 hex characters.
+/// Strix MEDIUM (PR #301): kayan nokta reddi. Deterministik uretim
+/// kayan nokta kullanamaz (Budlum kurali); shell kapisi bunu denetlerdi,
+/// Rust portu dusurdu.
+fn check_no_float(code: &str) -> Result<(), String> {
+    for line in code.lines() {
+        let t = line.trim_start();
+        if (t.contains("f32")
+            || t.contains("f64")
+            || t.contains(" as f")
+            || t.contains("_f32")
+            || t.contains("_f64"))
+            && !t.starts_with("//")
+        {
+            return Err(format!(
+                "kayan nokta uretim yolunda: {t}. Deterministik uretim \
+                 tamsayi aritmetigi zorunludur (Budlum kurali)."
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Strix MEDIUM (PR #301): en az bir davranissal assertion testi zorunlu.
+fn check_behavioural_test(code: &str) -> Result<(), String> {
+    let behavioural = [
+        "a_gradient_is_not_a_single_flat_colour",
+        "generated_bytes_match_their_frozen_vectors",
+    ]
+    .iter()
+    .any(|name| code.contains(&format!("fn {name}(")));
+    if behavioural {
+        return Ok(());
+    }
+    Err(String::from(
+        "davranissal assertion testi yok (a_gradient_is_not_a_single_flat_colour \
+         gibi). Frozen vektorler disinda, ciktiyi gercekten dogrulayan bir test \
+         zorunludur (Strix MEDIUM).",
+    ))
+}
+
+/// run() 100 satiri asar (frozen-vector tablo dogrulamasi uzun); bu bir
+/// güvenlik kontrolü degil, pedantic stil kuralidir (struct_excessive_bools
+/// emsali). Kontrollerin kendisi yardimci fonksiyonlarda testlidir.
+#[allow(clippy::too_many_lines)]
 pub fn run(root: &Path) -> Result<String, String> {
     let code = code_of(root)?;
     let generators = generator_variants(&code);
@@ -58,6 +102,8 @@ pub fn run(root: &Path) -> Result<String, String> {
              alters every generated object would pass CI silently",
         ));
     }
+    check_no_float(&code)?;
+    check_behavioural_test(&code)?;
     // The test body from the fn to the first closing brace at depth 1.
     let start = code
         .find("fn generated_bytes_match_their_frozen_vectors")
