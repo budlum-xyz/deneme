@@ -260,7 +260,7 @@ fn body_of(code: &str, header: &str) -> Option<String> {
     None
 }
 
-/// Bir `fn <name>(` in gercekten `#[test]` isaretli oldugunu dogrular.
+/// Bir `fn name(` fonksiyonunun gercekten `#[test]` isaretli oldugunu dogrular.
 /// Strix MEDIUM (PR #301): herhangi bir `fn <name>(` yardimci veya olu kod
 /// olabilir; gate yalnizca `#[test]` fonksiyonlarini sayar.
 fn is_test_fn(deal_src: &str, name: &str) -> bool {
