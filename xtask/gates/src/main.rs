@@ -47,6 +47,7 @@ mod gates {
     pub mod every_fuzz_target_is_run;
     pub mod gov_slash_evidence_is_validator_only;
     pub mod hash_inputs_are_length_prefixed;
+    pub mod logup_multipliers;
     pub mod mermaid;
     pub mod no_new_shell_gates;
     pub mod security_scans_can_fail;
@@ -54,6 +55,7 @@ mod gates {
     pub mod suppressions_are_justified;
     pub mod tee_trust_boundary_is_structural;
     pub mod the_image_builds_what_the_manifest_declares;
+    pub mod threshold_rates;
     pub mod wire_fields_are_signed;
     pub mod workflows_produce_jobs;
     pub mod zero_address_sender_is_verified;
@@ -154,6 +156,18 @@ const GATES: &[Gate] = &[
         replaces: None,
         run: gates::no_new_shell_gates::run,
         self_test: gates::no_new_shell_gates::self_test,
+    },
+    Gate {
+        name: "logup-multipliers-are-boolean",
+        replaces: Some("check-logup-multipliers-are-boolean.sh"),
+        run: gates::logup_multipliers::run,
+        self_test: gates::logup_multipliers::self_test,
+    },
+    Gate {
+        name: "threshold-rates-share-one-scale",
+        replaces: Some("check-threshold-rates-share-one-scale.sh"),
+        run: gates::threshold_rates::run,
+        self_test: gates::threshold_rates::self_test,
     },
     Gate {
         name: "zero-address-sender-verified",

@@ -172,9 +172,12 @@ fn collect_rs(root: &Path, out: &mut Vec<PathBuf>) {
         return;
     };
     for entry in entries.flatten() {
+        let Ok(p_kind) = entry.file_type() else {
+            continue;
+        };
         let p = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if p.is_dir() {
+        if p_kind.is_dir() {
             if matches!(name.as_str(), ".git" | "target" | "node_modules") {
                 continue;
             }
@@ -557,8 +560,7 @@ fn scratch_dir() -> Result<PathBuf, String> {
     for attempt in 0..100u32 {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir = base.join(format!("hashlen-{}-{nanos}-{attempt}", std::process::id()));
         match std::fs::create_dir(&dir) {
             Ok(()) => return Ok(dir),

@@ -161,9 +161,9 @@ jobs:
       # gecti, cunku testler esikleri birbiriyle karsilastiriyordu ve iki taraf da
       # birlikte kaymisti. Rust disinda yeniden hesaplayarak yakalandi.
       - name: Esik oranlari tek olcek kanaryasi
-        run: bash ./scripts/check-threshold-rates-share-one-scale.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- threshold-rates-share-one-scale --self-test
       - name: Esik oranlari tek olcekte
-        run: bash ./scripts/check-threshold-rates-share-one-scale.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- threshold-rates-share-one-scale
       - name: Turev kaliciligi kanaryasi
         run: bash ./scripts/check-a-derivation-cannot-outlive-its-master.sh --self-test
       - name: Bir turev master'indan uzun yasayamaz
@@ -1035,8 +1035,8 @@ jobs:
       # the tree happened to use r1.
       - name: LogUp carpanlari boolean mi + kanarya
         run: |
-          bash ./scripts/check-logup-multipliers-are-boolean.sh --self-test
-          bash ./scripts/check-logup-multipliers-are-boolean.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- logup-multipliers-are-boolean --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- logup-multipliers-are-boolean
       # The AIR packs the CPU, register and memory tables into one matrix and
       # nothing keeps them the same length. A constraint reading a side table
       # must fire on the last row, not on the last CPU row. The register image
@@ -1179,8 +1179,8 @@ jobs:
       # error naming the cause.
       - name: hash girdileri uzunluk onekli mi + kanarya
         run: |
-          bash ./scripts/check-hash-inputs-are-length-prefixed.sh --self-test
-          bash ./scripts/check-hash-inputs-are-length-prefixed.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- hash-inputs-length-prefixed --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- hash-inputs-length-prefixed
       # `settle_agent_payment_immediate` removed the payment from the live map
       # and then decided whether to accept it. One refusal put it back and the
       # other did not, so a second settle reported failure and consumed the
