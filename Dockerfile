@@ -2,7 +2,7 @@
 # Multi-stage build: builder → runtime
 
 # ── Stage 1: Builder ────────────────────────────────────────
-# Toolchain, rust-toolchain.toml (channel = "1.94.0") ve CI'daki
+# Toolchain, rust-toolchain.toml (channel = "1.97.0") ve CI'daki
 # dtolnay/rust-toolchain pini ile AYNI olmak zorundadir. Onceden 1.97.1
 # kullaniliyordu: imaj CI'dan farkli bir derleyiciyle build ediliyor, bu da
 # "tekrarlanabilir build" iddiasini gecersiz kiliyordu (codegen ve MIR
@@ -10,13 +10,13 @@
 # olur).
 #
 # Digest, registry'den dogrulandi: bu imajin config blob'undaki
-# RUST_VERSION=1.94.0'dir. Etiket adi kanit degildir -- onceki hali
+# RUST_VERSION=1.97.0'dir. Etiket adi kanit degildir -- onceki hali
 # `rust:1.97.1-bookworm@sha256:77fac8b9...` idi ve o digest'in icindeki
 # RUST_VERSION gercekten 1.97.1'di, yorum "1.94.0 icin dogrulandi" dedigi
-# halde. Sadece etiket 1.94.0'a cevrilse digest onu ezerdi; ikisi birlikte
+# halde. Sadece etiket 1.97.0'a cevrilse digest onu ezerdi; ikisi birlikte
 # degismek zorunda. `check-docker-toolchain-matches-pin.sh` bu ikisinin ve
 # rust-toolchain.toml'un ayni surumu gosterdigini her PR'da dogrular.
-FROM rust:1.94.0-bookworm@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f AS builder
+FROM rust:1.97.0-bookworm@sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c3073 AS builder
 
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \

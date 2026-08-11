@@ -672,8 +672,7 @@ fn scratch_dir() -> Result<PathBuf, String> {
     for attempt in 0..100u32 {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let dir = base.join(format!(
             "self-derived-id-{}-{nanos}-{attempt}",
             std::process::id()

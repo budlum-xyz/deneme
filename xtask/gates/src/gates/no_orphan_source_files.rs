@@ -442,9 +442,7 @@ fn exempt(rel: &str) -> bool {
 }
 
 fn count_lines(p: &Path) -> usize {
-    std::fs::read_to_string(p)
-        .map(|s| s.lines().count())
-        .unwrap_or(0)
+    std::fs::read_to_string(p).map_or(0, |s| s.lines().count())
 }
 
 /// Resolve `mod X;` and `#[path]` declarations in one file to concrete paths.

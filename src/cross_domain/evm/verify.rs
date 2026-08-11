@@ -305,11 +305,9 @@ mod tests {
         // N confirmation headers (chain: parent = prev hash, number+1).
         let mut conf_headers = Vec::new();
         let mut prev_hash = target_hash;
-        let mut prev_num = 100u64;
-        for _ in 0..n_conf {
-            let h = header_rlp(prev_hash, prev_num + 1, receipts_root);
+        for offset in 1..=n_conf {
+            let h = header_rlp(prev_hash, 100 + offset as u64, receipts_root);
             prev_hash = keccak256(&h);
-            prev_num += 1;
             conf_headers.push(h);
         }
 

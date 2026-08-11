@@ -1,9 +1,10 @@
-7108
+7142
 # ---------------------------------------------------------------------------
 # G2 pedantic/nursery ratchet baseline.
 # Bu dosyanin ILK bare-sayi satiri baseline'dir (scripts/check-clippy-extra.sh
 # `grep -E '^[0-9]+$' | head -1` ile okur); asagisi gerekcedir.
 #
+# 2026-08-11 - 7108 -> 7142 (MSRV 1.97.0 yukseltmesi, PR #161: +34 yeni pedantic/nursery lint)
 # 2026-07-26 - 217 -> 7108 (ekip, PR #158)
 #
 # BU BIR GEVSETME DEGIL; ratchet'in ILK GERCEK OLCUMU.

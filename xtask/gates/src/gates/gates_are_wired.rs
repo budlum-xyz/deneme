@@ -185,10 +185,8 @@ fn shlex_split(line: &str) -> Option<Vec<String>> {
             }
             '\\' => {
                 in_token = true;
-                match chars.next() {
-                    Some(ch) => cur.push(ch),
-                    None => return None, // trailing backslash: shlex errors out
-                }
+                let ch = chars.next()?; // trailing backslash: shlex errors out
+                cur.push(ch);
             }
             other => {
                 in_token = true;
@@ -451,14 +449,12 @@ pub fn run(root: &Path) -> Result<String, String> {
 }
 
 fn count_scripts(scripts_dir: &Path) -> usize {
-    std::fs::read_dir(scripts_dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|e| is_gate_script_name(&e.file_name().to_string_lossy()))
-                .count()
-        })
-        .unwrap_or(0)
+    std::fs::read_dir(scripts_dir).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|e| is_gate_script_name(&e.file_name().to_string_lossy()))
+            .count()
+    })
 }
 
 /// Is this file name one of the gate scripts this gate polices?

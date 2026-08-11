@@ -178,8 +178,7 @@ fn measure(root: &Path) -> Result<Inventory, String> {
             }
             let name = entry.file_name().to_string_lossy().to_string();
             let count = std::fs::read_dir(entry.path())
-                .map(|d| d.flatten().filter(|f| f.path().is_file()).count())
-                .unwrap_or(0);
+                .map_or(0, |d| d.flatten().filter(|f| f.path().is_file()).count());
             corpora.insert(name, count);
         }
     }

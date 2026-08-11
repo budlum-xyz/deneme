@@ -73,7 +73,7 @@ fn walk_into(dir: &Path, skip_dirs: &[&str], skip_files: &[&str], out: &mut Vec<
             }
         } else if !skip_files.contains(&name_str.as_ref())
             && (kind.is_file()
-                || (kind.is_symlink() && fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false)))
+                || (kind.is_symlink() && fs::metadata(&path).is_ok_and(|m| m.is_file())))
         {
             out.push(path);
         }

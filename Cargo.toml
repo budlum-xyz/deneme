@@ -2,7 +2,7 @@
 name = "budlum-core"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.94.0"
+rust-version = "1.97.0"
 # : root cargo-deny `unlicensed = "deny"` kuralı kendi crate'imizi de
 # reddetmesin diye zorunlu. Repo kökündeki LICENSE.md (Apache-2.0) ile aynı.
 license = "Apache-2.0"

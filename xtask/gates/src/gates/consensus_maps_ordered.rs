@@ -129,10 +129,8 @@ fn alias_decl(sline: &str) -> Option<(String, String)> {
     let rest = rest.trim_start();
     // optional single-level generic args on the alias name
     let rest = if let Some(r) = rest.strip_prefix('<') {
-        match r.find('>') {
-            Some(end) => &r[end + 1..],
-            None => return None,
-        }
+        let end = r.find('>')?;
+        &r[end + 1..]
     } else {
         rest
     };
@@ -168,10 +166,8 @@ fn field_kind_any(sline: &str) -> Option<(String, String)> {
     // optional generic arguments: `<.*>` greedy to the last `>`
     let after = after.trim_start();
     let after = if let Some(r) = after.strip_prefix('<') {
-        match r.rfind('>') {
-            Some(end) => &r[end + 1..],
-            None => return None,
-        }
+        let end = r.rfind('>')?;
+        &r[end + 1..]
     } else {
         after
     };

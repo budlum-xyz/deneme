@@ -93,7 +93,7 @@ fn walk_into(dir: &Path, skip_dirs: &[&str], out: &mut Vec<PathBuf>) {
                 walk_into(&path, skip_dirs, out);
             }
         } else if kind.is_file()
-            || (kind.is_symlink() && fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false))
+            || (kind.is_symlink() && fs::metadata(&path).is_ok_and(|m| m.is_file()))
         {
             // A symlink to a file is still a file with content worth
             // scanning; only directory symlinks are not followed.
