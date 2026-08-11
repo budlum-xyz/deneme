@@ -120,9 +120,9 @@ jobs:
       # zaten olcegi birakmis bir degere uygulaniyordu, iki uc rengi de atiyor
       # ve duz siyah cizyordu, tutarli bicimde hash'leyerek.
       - name: Sifir-depolama vektor kanaryasi
-        run: bash ./scripts/check-zero-storage-bytes-are-frozen.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- zero-storage-bytes-are-frozen --self-test
       - name: Uretilen baytlar dondurulmus vektore bagli
-        run: bash ./scripts/check-zero-storage-bytes-are-frozen.sh
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- zero-storage-bytes-are-frozen
       - name: Ulasilamayan kapi kanaryasi
         run: bash ./scripts/check-guards-are-reachable.sh --self-test
       - name: Ulasilamayan kapi sayisi artmadi
@@ -1126,8 +1126,8 @@ jobs:
       # the price was computed and simply went unread.
       - name: depolama boyuta gore mi fiyatlaniyor + kanarya
         run: |
-          bash ./scripts/check-storage-is-priced-by-size.sh --self-test
-          bash ./scripts/check-storage-is-priced-by-size.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-is-priced-by-size --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-is-priced-by-size
       # Two entry points take a manifest an untrusted caller built.
       # `RegisterStorageManifest` ran `validate_untrusted`; `open_deal` ran
       # `verify_id` and stopped, and it is the path that also takes the payer's
@@ -1243,8 +1243,8 @@ jobs:
       # paid replica, had tests, and was never called by anything.
       - name: depolama cezalari uygulaniyor mu + kanarya
         run: |
-          bash ./scripts/check-storage-penalties-are-enforced.sh --self-test
-          bash ./scripts/check-storage-penalties-are-enforced.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-penalties-are-enforced --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-penalties-are-enforced
           bash ./scripts/check-content-encryption-is-declared-and-bound.sh --self-test
           bash ./scripts/check-content-encryption-is-declared-and-bound.sh
           bash ./scripts/check-shard-placement-is-sticky-and-staked.sh --self-test

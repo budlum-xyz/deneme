@@ -51,12 +51,15 @@ mod gates {
     pub mod no_new_shell_gates;
     pub mod security_scans_can_fail;
     pub mod self_derived_ids_cover_every_field;
+    pub mod storage_penalties;
+    pub mod storage_priced;
     pub mod suppressions_are_justified;
     pub mod tee_trust_boundary_is_structural;
     pub mod the_image_builds_what_the_manifest_declares;
     pub mod wire_fields_are_signed;
     pub mod workflows_produce_jobs;
     pub mod zero_address_sender_is_verified;
+    pub mod zero_storage_frozen;
 }
 
 /// One gate, as the runner sees it.
@@ -154,6 +157,24 @@ const GATES: &[Gate] = &[
         replaces: None,
         run: gates::no_new_shell_gates::run,
         self_test: gates::no_new_shell_gates::self_test,
+    },
+    Gate {
+        name: "storage-is-priced-by-size",
+        replaces: Some("check-storage-is-priced-by-size.sh"),
+        run: gates::storage_priced::run,
+        self_test: gates::storage_priced::self_test,
+    },
+    Gate {
+        name: "storage-penalties-are-enforced",
+        replaces: Some("check-storage-penalties-are-enforced.sh"),
+        run: gates::storage_penalties::run,
+        self_test: gates::storage_penalties::self_test,
+    },
+    Gate {
+        name: "zero-storage-bytes-are-frozen",
+        replaces: Some("check-zero-storage-bytes-are-frozen.sh"),
+        run: gates::zero_storage_frozen::run,
+        self_test: gates::zero_storage_frozen::self_test,
     },
     Gate {
         name: "zero-address-sender-verified",
