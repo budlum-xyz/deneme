@@ -68,9 +68,11 @@ fn check_no_float(code: &str) -> Result<(), String> {
 
 /// Strix MEDIUM (PR #301): en az bir davranissal assertion testi zorunlu.
 fn check_behavioural_test(code: &str) -> Result<(), String> {
+    // Strix MEDIUM (PR #301): frozen-vector test kendisi davranissal degildir;
+    // bagimsiz bir cikti-dogrulama testi zorunlu (a_gradient gibi).
     let behavioural = [
         "a_gradient_is_not_a_single_flat_colour",
-        "generated_bytes_match_their_frozen_vectors",
+        "a_gradient_runs_between_its_two_endpoint_colours",
     ]
     .iter()
     .any(|name| code.contains(&format!("fn {name}(")));
@@ -84,8 +86,8 @@ fn check_behavioural_test(code: &str) -> Result<(), String> {
     ))
 }
 
-/// run() 100 satiri asar (frozen-vector tablo dogrulamasi uzun); bu bir
-/// güvenlik kontrolü degil, pedantic stil kuralidir (struct_excessive_bools
+/// `run()` 100 satiri asar (frozen-vector tablo dogrulamasi uzun); bu bir
+/// güvenlik kontrolü degil, pedantic stil kuralidir (`struct_excessive_bools`
 /// emsali). Kontrollerin kendisi yardimci fonksiyonlarda testlidir.
 #[allow(clippy::too_many_lines)]
 pub fn run(root: &Path) -> Result<String, String> {
@@ -221,7 +223,7 @@ pub fn self_test() -> Result<String, String> {
     let c = "c".repeat(64);
     let d = "d".repeat(64);
     let good = format!(
-        "pub enum GeneratorId {{\n    Gradient,\n    Plasma,\n}}\nfn generated_bytes_match_their_frozen_vectors() {{\n    let _: &[(GeneratorId, u8, u32, &str)] = &[\n        (\n            GeneratorId::Gradient,\n            7,\n            3072,\n            \"{a}\",\n        ),\n        (\n            GeneratorId::Gradient,\n            1,\n            192,\n            \"{b}\",\n        ),\n        (\n            GeneratorId::Plasma,\n            7,\n            3072,\n            \"{c}\",\n        ),\n        (\n            GeneratorId::Plasma,\n            1,\n            192,\n            \"{d}\",\n        ),\n    ];\n}}\n"
+        "pub enum GeneratorId {{\n    Gradient,\n    Plasma,\n}}\nfn generated_bytes_match_their_frozen_vectors() {{\n    let _: &[(GeneratorId, u8, u32, &str)] = &[\n        (\n            GeneratorId::Gradient,\n            7,\n            3072,\n            \"{a}\",\n        ),\n        (\n            GeneratorId::Gradient,\n            1,\n            192,\n            \"{b}\",\n        ),\n        (\n            GeneratorId::Plasma,\n            7,\n            3072,\n            \"{c}\",\n        ),\n        (\n            GeneratorId::Plasma,\n            1,\n            192,\n            \"{d}\",\n        ),\n    ];\n}}\nfn a_gradient_is_not_a_single_flat_colour() {{}}\n"
     );
     std::fs::write(dir.join("src/storage/generated.rs"), good).map_err(|e| e.to_string())?;
     let good_ok = run(&dir).is_ok();
