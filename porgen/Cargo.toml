@@ -1,0 +1,18 @@
+[package]
+name = "porgen"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97.0"
+license = "Apache-2.0"
+description = "BUD Uretim-Agi prototipi: Proof of Regeneration (PoRGen) - depolama yerine CPU uretimi"
+publish = false
+
+[dependencies]
+sha2 = "0.10"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
