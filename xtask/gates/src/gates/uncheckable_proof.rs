@@ -42,15 +42,31 @@ pub fn run(root: &Path) -> Result<String, String> {
     // The flag is a plain constant `false`. Line-based: find the line that
     // defines `fn <flag>() -> bool {`, then the first non-empty line inside
     // the body must be `false`.
+    // Strix MEDIUM (PR #302): flag sabit govdeli olmali. Ilk satirin `false`
+    // olmasi yetmez; govdede baska kod varsa (if/sabit degil) kabul edilmez.
     let flag_value: Option<bool> = {
         let needle = format!("fn {flag}()");
         match code.lines().position(|l| l.contains(&needle)) {
             None => None,
-            Some(def_idx) => code
-                .lines()
-                .skip(def_idx + 1)
-                .find(|l| !l.trim().is_empty())
-                .map(|l| l.trim() == "false"),
+            Some(def_idx) => {
+                let body_lines: Vec<&str> = code
+                    .lines()
+                    .skip(def_idx + 1)
+                    .skip_while(|l| l.trim().is_empty())
+                    .take_while(|l| l.trim() != "}")
+                    .collect();
+                // Govde tek satir olmali ve o satir `false` (aciklama disi).
+                let meaningful: Vec<&str> = body_lines
+                    .iter()
+                    .map(|l| l.trim())
+                    .filter(|l| !l.is_empty() && !l.starts_with("//"))
+                    .collect();
+                if meaningful.len() == 1 && meaningful[0] == "false" {
+                    Some(true)
+                } else {
+                    Some(false)
+                }
+            }
         }
     };
     // `flag_value` is `Some(true)` when the body is exactly `false`, i.e.
