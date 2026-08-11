@@ -199,9 +199,12 @@ fn iter_field(candidate: &str) -> Option<String> {
     // optional `.values()` / `.keys()` / `.iter()`
     let after_method = if let Some(r) = after_field.strip_prefix('.') {
         let r = r.trim_start();
+        // Strix MEDIUM (PR #306): Rust `values ()` / `keys ()` / `iter ()`
+        // whitespace'li cagriya izin verir; gate de aynisini kabul etmeli.
+        let compact_r: String = r.chars().filter(|c| !c.is_whitespace()).collect();
         let matched = ["values()", "keys()", "iter()"]
             .iter()
-            .find(|m| r.starts_with(**m))?;
+            .find(|m| compact_r.starts_with(**m))?;
         &r[matched.len()..]
     } else {
         after_field
