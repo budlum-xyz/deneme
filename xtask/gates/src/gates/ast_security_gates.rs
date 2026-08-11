@@ -205,7 +205,9 @@ impl<'ast> Visit<'ast> for ZeroBlockCheck {
 /// dalını bulur ve `ZeroBlockCheck` ile doğrular.
 #[derive(Default)]
 struct ZeroAddressFinder {
-    result: Option<ZeroBlockCheck>,
+    // Strix MEDIUM (PR #305): tum Address::zero dallari toplanir; ilk
+    // eslesme degil. Herhangi biri korumasizsa gate kirmizi dusmeli.
+    results: Vec<ZeroBlockCheck>,
     in_validate: bool,
 }
 
@@ -229,12 +231,15 @@ impl<'ast> Visit<'ast> for ZeroAddressFinder {
     }
 
     fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
-        if self.in_validate && self.result.is_none() {
+        if self.in_validate {
             let cond = compact(&node.cond);
-            if cond.contains("Address::zero") {
+            // Yalnizca GONDEREN (tx.from) zero-address dali toplanir; diger
+            // zero kullanimlari (tx.to, tx.data vs.) sender guard'i degildir
+            // ve yanlis pozitif uretir.
+            if cond.contains("tx.from") && cond.contains("Address::zero") {
                 let mut check = ZeroBlockCheck::default();
                 check.visit_block(&node.then_branch);
-                self.result = Some(check);
+                self.results.push(check);
                 return;
             }
         }
@@ -368,11 +373,16 @@ impl<'ast> Visit<'ast> for TeeVisitor {
     fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
         if self.in_sign_with_privacy {
             let cond = compact(&node.cond);
-            let which = if cond.contains("verify_measurement") {
+            // Strix MEDIUM (PR #305): guard, verify_quote'tan donen
+            // attestation DEGISKENINE karsi yapilmalı. Ilgisiz bir kosulun
+            // metninde verify_measurement/backend/report_data gecmesi guard
+            // sayilmaz.
+            let on_attestation = cond.contains("attestation");
+            let which = if on_attestation && cond.contains("verify_measurement") {
                 Some(0)
-            } else if cond.contains("backend") {
+            } else if on_attestation && cond.contains("backend") {
                 Some(1)
-            } else if cond.contains("verify_report_data") {
+            } else if on_attestation && cond.contains("verify_report_data") {
                 Some(2)
             } else {
                 None
@@ -486,6 +496,9 @@ struct GovSlashVisitor {
     in_slash_validator: bool,
     has_digest_condition: bool,
     digest_guards_return: bool,
+    // Strix MEDIUM (PR #305): .any() sonucu kullanilmali (let baglamasi);
+    // sonucu atilan bir .any() decoy'dur.
+    any_result_used: bool,
 }
 
 impl GovSlashVisitor {
@@ -495,6 +508,7 @@ impl GovSlashVisitor {
             in_slash_validator: false,
             has_digest_condition: false,
             digest_guards_return: false,
+            any_result_used: false,
         }
     }
 }
@@ -537,6 +551,19 @@ impl<'ast> Visit<'ast> for GovSlashVisitor {
         visit::visit_expr_match(self, node);
     }
 
+    fn visit_stmt(&mut self, node: &'ast Stmt) {
+        if self.in_slash_validator {
+            if let Stmt::Local(local) = node {
+                if let Some(init) = &local.init {
+                    if compact(&init.expr).contains(".any(") {
+                        self.any_result_used = true;
+                    }
+                }
+            }
+        }
+        visit::visit_stmt(self, node);
+    }
+
     fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
         if self.in_slash_validator {
             let cond = compact(&node.cond);
@@ -559,7 +586,10 @@ impl<'ast> Visit<'ast> for GovSlashVisitor {
                 if let Expr::Closure(c) = arg {
                     if closure_has_digest_cmp(&c.body) {
                         self.has_digest_condition = true;
-                        if closure_tail_is_digest_cmp(&c.body) {
+                        // Strix MEDIUM (PR #305): sonucu let ile baglanmis
+                        // olmali; atilmis .any() sonucu slash kararini
+                        // yonetmez.
+                        if self.any_result_used && closure_tail_is_digest_cmp(&c.body) {
                             self.digest_guards_return = true;
                         }
                     }
@@ -591,19 +621,18 @@ fn judge_file(src: &str, checks: Checks) -> Vec<String> {
     if checks.zero_address {
         let mut finder = ZeroAddressFinder::default();
         finder.visit_file(&ast);
-        match &finder.result {
-            Some(check) => {
-                if !check.guarded_success || check.after_verify_has_success {
-                    problems.push(String::from(
-                        "AST: validate_transaction_with_context zero-address dalinda gercek bir guard'li basari yok: Ok(()) tx.verify() blogunun dogrudan icinde olmali (closure, nested fn, nested if, match arm veya loop disinda) ve verify sonrasi yol fail-closed olmali (return Err / Err). CWE-306 guard'i dogrulanamadi.",
-                    ));
-                }
-            }
-            None => {
-                problems.push(String::from(
-                    "AST: validate_transaction_with_context icinde Address::zero dali bulunamadi; CWE-306 guard'i eksik.",
-                ));
-            }
+        if finder.results.is_empty() {
+            problems.push(String::from(
+                "AST: validate_transaction_with_context icinde Address::zero dali bulunamadi; CWE-306 guard'i eksik.",
+            ));
+        } else if finder
+            .results
+            .iter()
+            .any(|check| !check.guarded_success || check.after_verify_has_success)
+        {
+            problems.push(String::from(
+                "AST: validate_transaction_with_context icinde korumasiz bir zero-address dali var: Ok(()) tx.verify() blogunun dogrudan icinde olmali (closure, nested fn, nested if, match arm veya loop disinda) ve verify sonrasi yol fail-closed olmali (return Err / Err). CWE-306 guard'i dogrulanamadi.",
+            ));
         }
     }
 
