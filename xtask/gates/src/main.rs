@@ -43,12 +43,14 @@ mod gates {
     pub mod bns_names_are_safe_in_an_address_bar;
     pub mod capability_modules_are_wired;
     pub mod coding_audit_samples_the_relationship;
+    pub mod consensus_maps_ordered;
     pub mod content_encryption_is_declared_and_bound;
     pub mod every_fuzz_target_is_run;
     pub mod gov_slash_evidence_is_validator_only;
     pub mod hash_inputs_are_length_prefixed;
     pub mod mermaid;
     pub mod no_new_shell_gates;
+    pub mod rust_literals;
     pub mod security_scans_can_fail;
     pub mod self_derived_ids_cover_every_field;
     pub mod suppressions_are_justified;
@@ -154,6 +156,12 @@ const GATES: &[Gate] = &[
         replaces: None,
         run: gates::no_new_shell_gates::run,
         self_test: gates::no_new_shell_gates::self_test,
+    },
+    Gate {
+        name: "consensus-maps-are-ordered",
+        replaces: Some("check-consensus-maps-are-ordered.sh"),
+        run: gates::consensus_maps_ordered::run,
+        self_test: gates::consensus_maps_ordered::self_test,
     },
     Gate {
         name: "zero-address-sender-verified",

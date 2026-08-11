@@ -1287,8 +1287,8 @@ jobs:
       # a per-process seed, so this reads the source instead.
       - name: konsensus map'leri sirali mi + kanarya
         run: |
-          bash ./scripts/check-consensus-maps-are-ordered.sh --self-test
-          bash ./scripts/check-consensus-maps-are-ordered.sh
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- consensus-maps-are-ordered --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- consensus-maps-are-ordered
       # The Dockerfile said it had been moved to 1.94.0 and was still on
       # 1.97.1 - tag *and* digest, verified against the registry. Codegen
       # differs between releases, so the shipped container was outside the
