@@ -304,6 +304,10 @@ struct TeeVisitor {
     in_sign_with_privacy: bool,
     has_quote_call: bool,
     has_verify_quote: bool,
+    /// Strix MEDIUM (PR #305): `verify_quote` sonucunun atandigi degisken adi.
+    /// Guard'lar yalnizca bu degisken uzerindeki method cagrilariyla saglanir;
+    /// `fake_attestation` gibi benzer isimli decoy'lar sayilmaz.
+    attestation_var: Option<String>,
     measurement_guard: bool,
     backend_guard: bool,
     report_guard: bool,
@@ -319,6 +323,7 @@ impl TeeVisitor {
             in_sign_with_privacy: false,
             has_quote_call: false,
             has_verify_quote: false,
+            attestation_var: None,
             measurement_guard: false,
             backend_guard: false,
             report_guard: false,
@@ -349,6 +354,23 @@ impl<'ast> Visit<'ast> for TeeVisitor {
         }
     }
 
+    fn visit_stmt(&mut self, node: &'ast Stmt) {
+        if self.in_sign_with_privacy {
+            if let Stmt::Local(local) = node {
+                if let Some(init) = &local.init {
+                    let init_c = compact(&init.expr);
+                    if init_c.contains("verify_quote") {
+                        // let <name> = verifier.verify_quote(...)
+                        if let syn::Pat::Ident(pi) = &local.pat {
+                            self.attestation_var = Some(pi.ident.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        visit::visit_stmt(self, node);
+    }
+
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
         let method = node.method.to_string();
         let recv = node.receiver.to_token_stream().to_string();
@@ -377,12 +399,16 @@ impl<'ast> Visit<'ast> for TeeVisitor {
             // attestation DEGISKENINE karsi yapilmalı. Ilgisiz bir kosulun
             // metninde verify_measurement/backend/report_data gecmesi guard
             // sayilmaz.
-            let on_attestation = cond.contains("attestation");
-            let which = if on_attestation && cond.contains("verify_measurement") {
+            // Strix MEDIUM (PR #305): guard yalnizca `verify_quote` sonucunun
+            // atandigi DEGISKEN uzerindeki method cagrisiyla saglanir.
+            // `fake_attestation` gibi benzer isimli degiskenler sayilmaz.
+            let guarded_var = self.attestation_var.as_deref().unwrap_or("");
+            let on_att = !guarded_var.is_empty() && cond.contains(&format!("{guarded_var}."));
+            let which = if on_att && cond.contains("verify_measurement") {
                 Some(0)
-            } else if on_attestation && cond.contains("backend") {
+            } else if on_att && cond.contains("backend") {
                 Some(1)
-            } else if on_attestation && cond.contains("verify_report_data") {
+            } else if on_att && cond.contains("verify_report_data") {
                 Some(2)
             } else {
                 None
@@ -496,9 +522,11 @@ struct GovSlashVisitor {
     in_slash_validator: bool,
     has_digest_condition: bool,
     digest_guards_return: bool,
-    // Strix MEDIUM (PR #305): .any() sonucu kullanilmali (let baglamasi);
-    // sonucu atilan bir .any() decoy'dur.
-    any_result_used: bool,
+    // Strix MEDIUM (PR #305): su an ziyaret edilen .any() bir let
+    // baglamasinin init'i mi? Yalnizca o zaman digest tail'i slash
+    // kararini yoneten kabul edilir. Arm boyunca tek boolean tutmak,
+    // onceki baglanmis .any() sonrasi discarded decoy'u kabul ederdi.
+    in_any_result_binding: bool,
 }
 
 impl GovSlashVisitor {
@@ -508,7 +536,7 @@ impl GovSlashVisitor {
             in_slash_validator: false,
             has_digest_condition: false,
             digest_guards_return: false,
-            any_result_used: false,
+            in_any_result_binding: false,
         }
     }
 }
@@ -556,7 +584,12 @@ impl<'ast> Visit<'ast> for GovSlashVisitor {
             if let Stmt::Local(local) = node {
                 if let Some(init) = &local.init {
                     if compact(&init.expr).contains(".any(") {
-                        self.any_result_used = true;
+                        let prev = self.in_any_result_binding;
+                        self.in_any_result_binding = true;
+                        // init.expr'i gez (method call burada islenir)
+                        visit::visit_expr(self, &init.expr);
+                        self.in_any_result_binding = prev;
+                        return;
                     }
                 }
             }
@@ -586,10 +619,10 @@ impl<'ast> Visit<'ast> for GovSlashVisitor {
                 if let Expr::Closure(c) = arg {
                     if closure_has_digest_cmp(&c.body) {
                         self.has_digest_condition = true;
-                        // Strix MEDIUM (PR #305): sonucu let ile baglanmis
-                        // olmali; atilmis .any() sonucu slash kararini
-                        // yonetmez.
-                        if self.any_result_used && closure_tail_is_digest_cmp(&c.body) {
+                        // Strix MEDIUM (PR #305): yalnizca SU AN bir let
+                        // baglamasinin init'inde islenen .any() digest
+                        // tail'i slash kararini yonetir.
+                        if self.in_any_result_binding && closure_tail_is_digest_cmp(&c.body) {
                             self.digest_guards_return = true;
                         }
                     }
@@ -642,6 +675,11 @@ fn judge_file(src: &str, checks: Checks) -> Vec<String> {
         if !tee.has_quote_call || !tee.has_verify_quote {
             problems.push(String::from(
                 "AST: sign_with_privacy quote->verify_quote zinciri yok.",
+            ));
+        }
+        if tee.attestation_var.is_none() {
+            problems.push(String::from(
+                "AST: sign_with_privacy icinde verify_quote sonucu bir degiskene atanmamis; guard'lar attestation'a baglanamaz.",
             ));
         }
         if !tee.measurement_guard {
