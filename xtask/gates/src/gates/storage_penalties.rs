@@ -190,6 +190,15 @@ fn check_root_escrow_deal(deal_code: &str, chain_code: &str, problems: &mut Vec<
                      then be subject to somebody else's cooldown."
                         .to_string(),
                 ),
+                // Strix MEDIUM (PR #301): ikinci arguman gercek zaman damgasi
+                // olmali. Sabit veya donmus bir deger, cogu operatorun surekli
+                // kosullu olmasina yol acar; gate bunu gormeli.
+                Some(a) if !a.contains("now") && !a.contains("unix") => problems.push(
+                    "`operator_cooldown_until` ikinci argumani zaman damgasi \
+                     degil (now/unix yok). Sabit bir deger, cogu operatorun \
+                     surekli kosullu olmasina yol acar; gecerli saat gecirilmeli."
+                        .to_string(),
+                ),
                 Some(_) => {}
             }
         }
@@ -251,8 +260,39 @@ fn body_of(code: &str, header: &str) -> Option<String> {
     None
 }
 
+/// Bir `fn <name>(` in gercekten `#[test]` isaretli oldugunu dogrular.
+/// Strix MEDIUM (PR #301): herhangi bir `fn <name>(` yardimci veya olu kod
+/// olabilir; gate yalnizca `#[test]` fonksiyonlarini sayar.
+fn is_test_fn(deal_src: &str, name: &str) -> bool {
+    let needle = format!("fn {name}(");
+    let mut offset = 0usize;
+    while let Some(pos) = deal_src[offset..].find(&needle) {
+        let absolute = offset + pos;
+        let prefix = &deal_src[..absolute];
+        let mut saw_test = false;
+        for line in prefix.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with("#[") && trimmed.ends_with(']') {
+                if trimmed == "#[test]" {
+                    saw_test = true;
+                }
+                continue;
+            }
+            break;
+        }
+        if saw_test {
+            return true;
+        }
+        offset = absolute + needle.len();
+    }
+    false
+}
+
 fn has_test(deal_src: &str, name: &str) -> bool {
-    deal_src.contains(&format!("fn {name}("))
+    is_test_fn(deal_src, name)
 }
 
 /// Evaluate a plain u64 constant expression like `6 * 60 * 60`.
