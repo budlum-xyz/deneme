@@ -180,84 +180,6 @@ fn slash_validator_block(src: &str) -> Option<String> {
     None
 }
 
-/// Is the digest guard a real guarded form? The guard body must itself end
-/// in `return true;` (no closure/nested-block decoy), and when the guard sits
-/// inside `.any(|...| { ... })` the enclosing `.any(...)` result must remain
-/// the controlling value - a `|| true` / `&& x` continuation after the
-/// closing `)` overrides the digest decision and must be rejected (Strix
-/// CWE-697, round 5/6/7/8 findings).
-fn is_guarded_form(block: &str, guard_str: &str) -> bool {
-    block.find(guard_str).is_some_and(|guard_start| {
-        let guard_rest = &block[guard_start..];
-        let open = guard_rest.find('{').unwrap_or(0);
-        let mut depth = 0i32;
-        let mut guard_end = None;
-        for (offset, ch) in guard_rest[open..].char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        guard_end = Some(open + offset);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        guard_end.is_some_and(|end| {
-            let guard_body = &guard_rest[open + 1..end];
-            // The digest guard is real only when its own brace-balanced body
-            // ends in `return true;`. A closure-decoy `return true;` inside a
-            // nested closure or inner block leaves the outer success to an
-            // unconditional tail expression, so the whole guard body must end
-            // with the return (Strix CWE-697, round 5/6/7 findings).
-            let trimmed = guard_body.trim_end();
-            if !trimmed.ends_with("return true;") {
-                return false;
-            }
-
-            // If the guarded form lives inside `.any(|...| { ... })`, the
-            // enclosing `.any(...)` result must itself remain the controlling
-            // value. Reject immediate boolean continuations such as `|| true`
-            // or `&& x` after the closing `)` - otherwise the guard is
-            // accepted while the slash decision is forced by the override
-            // (Strix CWE-697, round 8 finding).
-            block[..guard_start].rfind(".any(").is_none_or(|any_at| {
-                let any_rest = &block[any_at..];
-                let any_open = any_rest.find('{').unwrap_or(0);
-                let mut closure_depth = 0i32;
-                let mut closure_end = None;
-                for (offset, ch) in any_rest[any_open..].char_indices() {
-                    match ch {
-                        '{' => closure_depth += 1,
-                        '}' => {
-                            closure_depth -= 1;
-                            if closure_depth == 0 {
-                                closure_end = Some(any_open + offset);
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                closure_end.is_some_and(|closure_end| {
-                    let after = any_rest[closure_end + 1..].trim_start();
-                    after.strip_prefix(')').is_some_and(|rest| {
-                        let rest = rest.trim_start();
-                        rest.is_empty()
-                            || rest.starts_with(';')
-                            || rest.starts_with(',')
-                            || rest.starts_with(')')
-                            || rest.starts_with('}')
-                            || rest.starts_with(']')
-                    })
-                })
-            })
-        })
-    })
-}
-
 fn judge(src: &str) -> Vec<String> {
     let mut problems = Vec::new();
 
@@ -305,7 +227,99 @@ fn judge(src: &str) -> Vec<String> {
     // The guarded `return true` must be inside the digest-guard block AND not
     // inside a closure (`|| { return true; }`) or nested helper; a closure
     // decoy does not control the slash decision (Strix CWE-697, round 6).
-    let guarded_form = is_guarded_form(&block, &guard_str);
+    let guarded_form = block.find(&guard_str).is_some_and(|guard_start| {
+        let guard_rest = &block[guard_start..];
+        let open = guard_rest.find('{').unwrap_or(0);
+        let mut depth = 0i32;
+        let mut guard_end = None;
+        for (offset, ch) in guard_rest[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        guard_end = Some(open + offset + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        guard_end.is_some_and(|end| {
+            let body = &guard_rest[..end];
+            let closure_ret = body.contains("= ||")
+                || body.contains("= |")
+                || body.contains("move |")
+                || body.contains("|_|");
+            let empty_body = body.trim_end().ends_with('{')
+                || body.trim().ends_with("{ //")
+                || body.trim().ends_with("{ /*");
+            // `return true` must be at the guard's top level (nested_depth
+            // <= 1: the guard's own if). A return nested deeper (closure or
+            // move-closure body) is a decoy (Strix CWE-697, round 9).
+            let mut nested_depth = 0i32;
+            let mut top_level_return = false;
+            let mut nested_return = false;
+            for line in body.lines() {
+                let trimmed = line.trim();
+                if nested_depth <= 1 && trimmed.contains("return true;") {
+                    top_level_return = true;
+                }
+                if nested_depth > 1 && trimmed.contains("return true;") {
+                    nested_return = true;
+                }
+                nested_depth = nested_depth
+                    .saturating_add(trimmed.matches('{').count().try_into().unwrap_or(i32::MAX))
+                    .saturating_sub(trimmed.matches('}').count().try_into().unwrap_or(i32::MAX));
+            }
+            // The guard body must itself end in `return true;` so a trailing
+            // fall-through cannot carry the success (Strix CWE-697, round
+            // 5/6/7 findings, kept from the round-8 refactor on main).
+            let inside = &guard_rest[open + 1..end.saturating_sub(1)];
+            let ends_with_return = inside.trim_end().ends_with("return true;");
+            // An enclosing `.any(...)` whose result is then overridden
+            // (`|| true`, `&& x`) must be rejected: the guard is accepted
+            // while the slash decision is forced by the override (Strix
+            // CWE-697, round 8 finding).
+            let no_any_override = block[..guard_start].rfind(".any(").is_none_or(|any_at| {
+                let any_rest = &block[any_at..];
+                let any_open = any_rest.find('{').unwrap_or(0);
+                let mut closure_depth = 0i32;
+                let mut closure_end = None;
+                for (offset, ch) in any_rest[any_open..].char_indices() {
+                    match ch {
+                        '{' => closure_depth += 1,
+                        '}' => {
+                            closure_depth -= 1;
+                            if closure_depth == 0 {
+                                closure_end = Some(any_open + offset);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                closure_end.is_some_and(|closure_end| {
+                    let after = any_rest[closure_end + 1..].trim_start();
+                    after.strip_prefix(')').is_some_and(|rest| {
+                        let rest = rest.trim_start();
+                        rest.is_empty()
+                            || rest.starts_with(';')
+                            || rest.starts_with(',')
+                            || rest.starts_with(')')
+                            || rest.starts_with('}')
+                            || rest.starts_with(']')
+                    })
+                })
+            });
+            top_level_return
+                && !nested_return
+                && !closure_ret
+                && !empty_body
+                && ends_with_return
+                && no_any_override
+        })
+    });
     // tail_form: the digest comparison is the closure's last expression when
     // it appears inside `.any(|..| { .. })` with no `let` binding of it, no
     // separate `return true;`, and nothing that overrides the result right
@@ -314,9 +328,10 @@ fn judge(src: &str) -> Vec<String> {
     // slashing succeeds without evidence control (Strix CWE-697, round 8
     // finding).
     let tail_form = block.contains(digest_cmp)
-        && !block
-            .lines()
-            .any(|l| l.contains("let ") && l.contains("== evidence_hash"))
+        && !block.lines().any(|l| {
+            let t = l.trim();
+            (t.starts_with("let ") || t.starts_with("let_")) && t.contains("== evidence_hash")
+        })
         && !block.contains("return true;")
         && block.contains(".any(|")
         && block.rfind(digest_cmp).is_some_and(|cmp_at| {
@@ -325,15 +340,18 @@ fn judge(src: &str) -> Vec<String> {
             // closure/expression close (`}`, `)`, `]`, `,`) or a bare `;`
             // statement end. A `||`/`&&` continuation (`|| true`, `&& x`)
             // overrides the digest result and must fail.
-            after.strip_prefix('}').is_some_and(|rest| {
-                let rest = rest.trim_start();
-                rest.is_empty()
-                    || rest.starts_with(';')
-                    || rest.starts_with(',')
-                    || rest.starts_with(')')
-                    || rest.starts_with('}')
-                    || rest.starts_with(']')
-            }) || after.starts_with(')')
+            let until_stop = after.find([';', ',']).map_or(after, |i| &after[..i]);
+            !until_stop.contains("||")
+                && !until_stop.contains("&&")
+                && (after.strip_prefix('}').is_some_and(|rest| {
+                    let rest = rest.trim_start();
+                    rest.is_empty()
+                        || rest.starts_with(';')
+                        || rest.starts_with(',')
+                        || rest.starts_with(')')
+                        || rest.starts_with('}')
+                        || rest.starts_with(']')
+                }) || after.starts_with(')'))
         });
     if !guarded_form && !tail_form {
         problems.push(String::from(

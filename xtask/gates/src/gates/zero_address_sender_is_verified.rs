@@ -139,6 +139,11 @@ fn collect(root: &Path) -> Result<String, String> {
 /// finding).
 fn ok_success_in(text: &str) -> bool {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    // A unit-Ok used as a collection item (`vec![Ok(())]`, `[Ok(())]`) is not
+    // a control-flow success (Strix CWE-697, round 10 finding: nested-item).
+    if compact.contains("![Ok(())") || compact.contains("[Ok(()),") {
+        return false;
+    }
     compact.contains("Ok(())")
         || compact.contains("::Ok(())")
         || (compact.contains("Ok::<") && compact.contains(">(())"))
@@ -154,7 +159,6 @@ fn fail_closes_after_verify(text: &str) -> bool {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     compact.starts_with("returnErr(") || compact.starts_with("Err(")
 }
-
 fn judge(src: &str) -> Vec<String> {
     let mut problems = Vec::new();
 
@@ -237,16 +241,22 @@ fn judge(src: &str) -> Vec<String> {
                 }
             }
             let verify_block = &verify_rest[..verify_end];
-            let ok_in_verify = ok_success_in(verify_block);
+            // A success inside a closure (`|| { Ok(()) }`) or helper within
+            // the verify block does not guard the outer path; exclude it
+            // (Strix CWE-697, round 8 finding: nested helper decoys).
+            let verify_no_closure = !verify_block.contains("||") && !verify_block.contains("| ");
+            let ok_in_verify = verify_no_closure && ok_success_in(verify_block);
             let ok_before = ok_success_in(&block[..verify_start]);
             let after = &verify_rest[verify_end..];
             // The tail must fail closed. A success after the verified branch
             // - whether an `Ok(())`, a helper call, or a bare tail `true` -
             // reopens the bypass even when a decoy `Ok(())` sits inside the
             // branch; only `return Err(` / `Err(` is a real close (Strix
-            // CWE-697, round 5/6/7 findings).
+            // CWE-697, round 5/6/7 findings). An `Ok(())` after the verify
+            // block is likewise rejected (round 8 finding).
             let after_fails_closed = fail_closes_after_verify(after);
-            ok_in_verify && !ok_before && after_fails_closed
+            let ok_after = ok_success_in(after);
+            ok_in_verify && !ok_before && !ok_after && after_fails_closed
         });
         if has_ok_success && !guarded_success {
             problems.push(String::from(

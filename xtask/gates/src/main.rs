@@ -43,6 +43,7 @@ mod gates {
     pub mod accumulators_pinned;
     pub mod actionlint;
     pub mod air_selectors;
+    pub mod ast_security_gates;
     pub mod badges_current;
     pub mod binding_claims;
     pub mod bit_decompositions;
@@ -881,6 +882,14 @@ const GATES: &[Gate] = &[
         run_log: None,
         run_args: Some(gates::semver::run_args),
         self_test: gates::semver::self_test,
+    },
+    Gate {
+        name: "ast-security-gates",
+        replaces: None,
+        run: gates::ast_security_gates::run,
+        run_log: None,
+        run_args: None,
+        self_test: gates::ast_security_gates::self_test,
     },
     Gate {
         name: "zero-address-sender-verified",

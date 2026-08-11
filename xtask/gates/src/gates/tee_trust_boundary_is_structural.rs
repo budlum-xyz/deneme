@@ -192,7 +192,24 @@ fn has_rejecting_guard(body: &str, needle: &str) -> bool {
                                         }
                                     }
                                 }
-                                guarded = top_level_return_err;
+                                // Round 5/6/10 hardening kept from the
+                                // bulgular branch: a closure/nested-fn decoy
+                                // (`||`, `| `, `fn `) or a nested conditional
+                                // (a `return Err` appearing after a nested
+                                // `if` opener) must not satisfy the
+                                // rejecting-guard check even if the line walk
+                                // above could be fooled by brace layout.
+                                let closure_decoy = guard_body.contains("||")
+                                    || guard_body.contains("| ")
+                                    || guard_body.contains("fn ");
+                                let first_err = guard_body.find("return Err");
+                                let first_if = guard_body.find("if ");
+                                let nested_conditional = match (first_err, first_if) {
+                                    (Some(e), Some(f)) => f < e,
+                                    _ => false,
+                                };
+                                guarded =
+                                    top_level_return_err && !closure_decoy && !nested_conditional;
                                 break;
                             }
                         }
