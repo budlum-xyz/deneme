@@ -249,12 +249,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Economy invariant gate canary
-        run: bash ./scripts/check-economy-invariants.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- economy-invariants --self-test
       - name:  named invariant tests
         run: |
           set -euo pipefail
           cargo test --lib 2>&1 | tee /tmp/economy-invariants.txt
-          bash ./scripts/check-economy-invariants.sh /tmp/economy-invariants.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- economy-invariants /tmp/economy-invariants.txt
 
   fork-choice-gate:
     # : per-domain fork-choice/lifecycle named tests.
@@ -275,12 +275,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Fork-choice gate canary
-        run: bash ./scripts/check-fork-choice-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- fork-choice --self-test
       - name:  fork-choice tests
         run: |
           set -euo pipefail
           cargo test --lib 2>&1 | tee /tmp/fork-choice-gate.txt
-          bash ./scripts/check-fork-choice-gate.sh /tmp/fork-choice-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- fork-choice /tmp/fork-choice-gate.txt
 
   storage-provider-gate:
     # : StorageProvider trait + mock implementation named tests.
@@ -300,7 +300,7 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: StorageProvider gate canary
-        run: bash ./scripts/check-storage-provider-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-provider --self-test
       # The proof-boundary script existed in scripts/ but no job ran it, so it
       # proved nothing about any commit. Wired here rather than into a new job
       # because it is source-only and needs no build.
@@ -312,7 +312,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --lib 2>&1 | tee /tmp/storage-provider-gate.txt
-          bash ./scripts/check-storage-provider-gate.sh /tmp/storage-provider-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- storage-provider /tmp/storage-provider-gate.txt
 
   node-classification-gate:
     # : full/archive node classification + pruning policy named tests.
@@ -333,12 +333,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Node classification gate canary
-        run: bash ./scripts/check-node-classification-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- node-classification --self-test
       - name:  node classification tests
         run: |
           set -euo pipefail
           cargo test --lib node 2>&1 | tee /tmp/node-classification-gate.txt
-          bash ./scripts/check-node-classification-gate.sh /tmp/node-classification-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- node-classification /tmp/node-classification-gate.txt
 
   network-hardening-gate:
     # : network hardening named tests.
@@ -359,14 +359,14 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Network hardening gate canary
-        run: bash ./scripts/check-network-hardening-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- network-hardening --self-test
       - name:  network hardening tests
         run: |
           set -euo pipefail
           cargo test --lib 2>&1 | tee /tmp/network-hardening-gate.txt
           cargo test --lib peer_rate_limit_security_profile 2>&1 | tee -a /tmp/network-hardening-gate.txt
           cargo test --lib h5_ 2>&1 | tee -a /tmp/network-hardening-gate.txt
-          bash ./scripts/check-network-hardening-gate.sh /tmp/network-hardening-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- network-hardening /tmp/network-hardening-gate.txt
 
 
 
@@ -402,12 +402,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: PoA compliance gate self-test
-        run: bash ./scripts/check-poa-compliance-gate.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- poa-compliance --self-test
       - name:  PoA compliance tests
         run: |
           set -euo pipefail
           cargo test --lib poa_compliance 2>&1 | tee /tmp/poa-compliance-gate.txt
-          bash ./scripts/check-poa-compliance-gate.sh /tmp/poa-compliance-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- poa-compliance /tmp/poa-compliance-gate.txt
 
   governance-invariants:
     # : minimal on-chain governance parameter whitelist + activation timelock.
@@ -427,12 +427,12 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Governance invariant gate self-test
-        run: bash ./scripts/check-governance-invariants.sh --self-test
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- governance-invariants --self-test
       - name:  governance invariant tests
         run: |
           set -euo pipefail
           cargo test --lib governance 2>&1 | tee /tmp/governance-invariants-gate.txt
-          bash ./scripts/check-governance-invariants.sh /tmp/governance-invariants-gate.txt
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- governance-invariants /tmp/governance-invariants-gate.txt
 
   wallet-core-gate:
     # : wallet-core multisig/social recovery primitives.
