@@ -97,17 +97,39 @@ fn has_fn(code: &str, name: &str) -> bool {
 }
 
 /// A `#[test] fn name(` present.
-fn has_test(deal_src: &str, name: &str) -> bool {
-    let mut rest = deal_src;
-    while let Some(pos) = rest.find(&format!("fn {name}(")) {
-        let before = &rest[..pos];
-        let last_test = before.rfind("#[test]");
-        if last_test.is_some_and(|t| before[t..].lines().count() <= 3) {
+/// Bir `fn name(` fonksiyonunun gercekten `#[test]` isaretli oldugunu
+/// dogrular. Strix MEDIUM (PR #301): herhangi bir `fn name(` yardimci veya
+/// olu kod olabilir; gate yalnizca `#[test]` fonksiyonlarini sayar.
+fn is_test_fn(deal_src: &str, name: &str) -> bool {
+    let needle = format!("fn {name}(");
+    let mut offset = 0usize;
+    while let Some(pos) = deal_src[offset..].find(&needle) {
+        let absolute = offset + pos;
+        let prefix = &deal_src[..absolute];
+        let mut saw_test = false;
+        for line in prefix.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with("#[") && trimmed.ends_with(']') {
+                if trimmed == "#[test]" {
+                    saw_test = true;
+                }
+                continue;
+            }
+            break;
+        }
+        if saw_test {
             return true;
         }
-        rest = &rest[pos + 1..];
+        offset = absolute + needle.len();
     }
     false
+}
+
+fn has_test(deal_src: &str, name: &str) -> bool {
+    is_test_fn(deal_src, name)
 }
 
 /// # Errors
