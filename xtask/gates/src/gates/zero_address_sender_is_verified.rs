@@ -141,13 +141,14 @@ fn ok_success_in(text: &str) -> bool {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     // A unit-Ok used as a collection item (`vec![Ok(())]`, `[Ok(())]`) is not
     // a control-flow success (Strix CWE-697, round 10 finding: nested-item).
-    if compact.contains("![Ok(())") || compact.contains("[Ok(()),") {
-        return false;
-    }
-    compact.contains("Ok(())")
-        || compact.contains("::Ok(())")
-        || (compact.contains("Ok::<") && compact.contains(">(())"))
-        || (compact.contains("::Ok::<") && compact.contains(">(())"))
+    // Strix MEDIUM (PR #304): decoy yalnizca KENDI konumunu susturur; ayni
+    // bloktaki gercek Ok(()) hala sayilir. Decoy desenini metinden strip
+    // edip kalan gercek basarilari arariz.
+    let cleaned = compact.replace("![Ok(())", "![").replace("[Ok(()),", "[");
+    cleaned.contains("Ok(())")
+        || cleaned.contains("::Ok(())")
+        || (cleaned.contains("Ok::<") && cleaned.contains(">(())"))
+        || (cleaned.contains("::Ok::<") && cleaned.contains(">(())"))
 }
 
 /// Does the code after the positive `tx.verify()` block fail closed? Only a
