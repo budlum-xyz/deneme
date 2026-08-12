@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use super::{
     AccessGrant, AiDataInputRef, AssetId, DataAsset, DataAssetStatus, EncryptionPolicy, GrantId,
-    SaleAuthorization, SaleAuthorizationId,
+    SaleAuthorization, SaleAuthorizationId, Signature64,
 };
 
 /// AI Data Marketplace - Economic layer for user-to-AI data sales.
@@ -312,8 +312,21 @@ impl MarketplaceRegistry {
         Ok(())
     }
 
+    /// Sahibin doğrudan imzaladığı bir erişim izni kaydeder.
+    ///
+    /// Strix bulgusu (HIGH, CWE-347) gereği artık `validate_authenticated()`
+    /// Çağrılıyor: imzanın sıfır olmaması yetmez, `owner` adresinin açık
+    /// Anahtarıyla `signing_hash()` üzerinde gerçekten doğrulanması gerekir.
+    /// Yetki-dayanaklı izinler bu kapıdan giremez; onların tek üretim yolu
+    /// [`Self::issue_grant_from_sale_authorization`].
     pub fn create_access_grant(&mut self, grant: AccessGrant) -> Result<GrantId, String> {
-        grant.validate_shape()?;
+        if grant.authorized_by.is_some() {
+            return Err(
+                "authorization-backed AccessGrant must be issued via issue_grant_from_sale_authorization"
+                    .into(),
+            );
+        }
+        grant.validate_authenticated()?;
         let asset = self
             .data_assets
             .get(&grant.asset_id)
@@ -369,7 +382,9 @@ impl MarketplaceRegistry {
         &mut self,
         authorization: SaleAuthorization,
     ) -> Result<SaleAuthorizationId, String> {
-        authorization.validate_shape()?;
+        // Satıcı imzası burada, kayıt anında bir kez kriptografik olarak
+        // Doğrulanır; bu yetkiden türeyen izinler o doğrulamaya dayanır.
+        authorization.validate_authenticated()?;
         let asset = self
             .data_assets
             .get(&authorization.asset_id)
@@ -454,11 +469,26 @@ impl MarketplaceRegistry {
             max_reads,
             authorization.terms_hash,
         );
-        // Authorization-backed grant: the seller-signed sale authorization is
-        // The bounded owner consent for this grant shape in this primitive
-        // Layer. Real cryptographic signature verification remains a future
-        // Wallet/transaction concern; sentinel signatures still fail closed.
-        grant.owner_signature = authorization.seller_signature.clone();
+        // Yetki-dayanaklı izin: sahiplik rızası, kayıt sırasında satıcı
+        // İmzası doğrulanmış olan `SaleAuthorization`dan gelir. Eskiden bu
+        // Satır satıcı imzasını izne *kopyalıyordu* ve izin şekil kontrolünden
+        // Geçince imza doğrulanmış sayılıyordu - oysa o imza bu iznin özetini
+        // Değil, yetkinin özetini imzalıyor; hiçbir zaman doğrulanamazdı.
+        // Artık iznin kaynağı `authorized_by` ile açıkça işaretleniyor ve
+        // Kopyalanmış imza taşınmıyor.
+        grant.authorized_by = Some(authorization.authorization_id);
+        grant.owner_signature = Signature64::SENTINEL;
+        grant.grant_id = AccessGrant::derive_id(
+            &grant.asset_id,
+            &grant.owner,
+            &grant.grantee,
+            &grant.payer,
+            grant.price_paid,
+            grant.issued_at_block,
+            grant.expires_at_block,
+            grant.max_reads,
+            &grant.purpose_hash,
+        );
         grant.validate_shape()?;
         if self.access_grants.contains_key(&grant.grant_id) {
             return Err("AccessGrant already registered".into());
@@ -712,8 +742,19 @@ mod tests {
     use super::*;
     use crate::pollen::AccessGrantStatus;
 
+    /// Deterministik test anahtarı. B.U.D.'da adres, Ed25519 açık anahtarının
+    /// Ta kendisidir (`Address::from(keypair.public_key_bytes())`), bu yüzden
+    /// Testlerin gerçek imza üretebilmesi için adresin bir anahtardan gelmesi
+    /// Şart: eskiden `addr(1)` gibi uydurma adresler kullanılıyordu ve o
+    /// Adreslerin özel anahtarı olmadığı için hiçbir test gerçek imza
+    /// Doğrulayamıyordu - bulgunun gözden kaçmasının sebebi de buydu.
+    fn keypair(byte: u8) -> crate::crypto::primitives::KeyPair {
+        crate::crypto::primitives::KeyPair::from_seed(&[byte; 32])
+            .expect("deterministik test tohumu geçerli bir Ed25519 anahtarı vermeli")
+    }
+
     fn addr(byte: u8) -> Address {
-        Address::from([byte; 32])
+        Address::from(keypair(byte).public_key_bytes())
     }
 
     fn signed_sale_authorization(asset: &DataAsset) -> SaleAuthorization {
@@ -733,7 +774,9 @@ mod tests {
             max_grants,
             [0xAA; 32],
         );
-        authorization.seller_signature = super::super::Signature64::from([0x44; 64]);
+        // Varlık sahibi daima addr(1); imzayı onun özel anahtarıyla üret.
+        let sig = keypair(1).sign(&authorization.signing_hash());
+        authorization.seller_signature = Signature64::from(sig);
         authorization
     }
 
@@ -749,8 +792,41 @@ mod tests {
             max_reads,
             [8u8; 32],
         );
-        grant.owner_signature = super::super::Signature64::from([9u8; 64]);
+        let sig = keypair(1).sign(&grant.signing_hash());
+        grant.owner_signature = Signature64::from(sig);
         grant
+    }
+
+    /// Sahte imzalı izin: sıfır olmayan ama hiçbir anahtara ait olmayan
+    /// 64 bayt. Eski kod bunu geçerli rıza sayıyordu.
+    fn forged_grant(asset: &DataAsset, grantee: Address, max_reads: u32) -> AccessGrant {
+        let mut grant = AccessGrant::new_unsigned(
+            asset.asset_id,
+            asset.owner,
+            grantee,
+            grantee,
+            42,
+            10,
+            20,
+            max_reads,
+            [8u8; 32],
+        );
+        grant.owner_signature = Signature64::from([9u8; 64]);
+        grant
+    }
+
+    fn forged_sale_authorization(asset: &DataAsset) -> SaleAuthorization {
+        let mut authorization = SaleAuthorization::new_unsigned(
+            asset.asset_id,
+            asset.owner,
+            42,
+            10,
+            20,
+            2,
+            [0xAA; 32],
+        );
+        authorization.seller_signature = Signature64::from([0x44; 64]);
+        authorization
     }
 
     #[test]
@@ -1059,5 +1135,103 @@ mod tests {
         let a = reg.create_offer(seller, cid, 10).expect("first offer");
         let b = reg.create_offer(seller, cid, 20).expect("second offer");
         assert_ne!(a, b, "an incrementing counter must keep producing new ids");
+    }
+
+    // ---- Strix bulgusu (HIGH, CWE-347) regresyonları ----
+
+    /// Bulgunun tam hali: sıfır olmayan rastgele 64 bayt rıza değildir.
+    #[test]
+    fn a_forged_owner_signature_cannot_create_a_grant() {
+        let mut registry = MarketplaceRegistry::new();
+        let asset = DataAsset::new(addr(1), ContentId::of(b"asset"), [1u8; 32], true);
+        registry.register_data_asset(asset.clone()).unwrap();
+
+        let err = registry
+            .create_access_grant(forged_grant(&asset, addr(2), 1))
+            .expect_err("uydurma imzalı izin kabul edilmemeli");
+        assert!(
+            err.contains("not a valid signature by owner"),
+            "red gerekçesi imza doğrulamasını adlandırmalı, alınan: {err}"
+        );
+    }
+
+    /// Aynı şey satış yetkisi için: başkasının varlığına satış yetkisi
+    /// Kaydettirmek imza doğrulamasına takılmalı.
+    #[test]
+    fn a_forged_seller_signature_cannot_register_an_authorization() {
+        let mut registry = MarketplaceRegistry::new();
+        let asset = DataAsset::new(addr(1), ContentId::of(b"asset"), [1u8; 32], true);
+        registry.register_data_asset(asset.clone()).unwrap();
+
+        let err = registry
+            .create_sale_authorization(forged_sale_authorization(&asset))
+            .expect_err("uydurma imzalı satış yetkisi kabul edilmemeli");
+        assert!(
+            err.contains("not a valid signature by seller"),
+            "red gerekçesi imza doğrulamasını adlandırmalı, alınan: {err}"
+        );
+    }
+
+    /// Başka bir sahibin geçerli imzası da yetmez: imza `owner` alanına
+    /// Bağlıdır, herhangi bir geçerli imzaya değil.
+    #[test]
+    fn a_valid_signature_by_the_wrong_key_is_still_refused() {
+        let mut registry = MarketplaceRegistry::new();
+        let asset = DataAsset::new(addr(1), ContentId::of(b"asset"), [1u8; 32], true);
+        registry.register_data_asset(asset.clone()).unwrap();
+
+        let mut grant = AccessGrant::new_unsigned(
+            asset.asset_id,
+            asset.owner,
+            addr(2),
+            addr(2),
+            42,
+            10,
+            20,
+            1,
+            [8u8; 32],
+        );
+        // addr(3) gerçekten imzalıyor - ama varlığın sahibi o değil.
+        grant.owner_signature = Signature64::from(keypair(3).sign(&grant.signing_hash()));
+
+        let err = registry
+            .create_access_grant(grant)
+            .expect_err("yanlış anahtarın geçerli imzası kabul edilmemeli");
+        assert!(err.contains("not a valid signature by owner"), "alınan: {err}");
+    }
+
+    /// İmza içeriği bağlar: imzalandıktan sonra fiyat değiştirilirse doğrulama
+    /// Düşmeli.
+    #[test]
+    fn tampering_with_a_signed_authorization_invalidates_it() {
+        let asset = DataAsset::new(addr(1), ContentId::of(b"asset"), [1u8; 32], true);
+        let mut authorization = signed_sale_authorization(&asset);
+        authorization.verify_seller_signature().expect("taze imza geçerli olmalı");
+
+        authorization.unit_price += 1;
+        assert!(
+            authorization.verify_seller_signature().is_err(),
+            "imzalandıktan sonra değiştirilen fiyat doğrulamayı düşürmeli"
+        );
+    }
+
+    /// Yetki-dayanaklı izin dışarıdan enjekte edilemez; tek üretim yolu
+    /// `issue_grant_from_sale_authorization`.
+    #[test]
+    fn an_authorization_backed_grant_cannot_be_injected_directly() {
+        let mut registry = MarketplaceRegistry::new();
+        let asset = DataAsset::new(addr(1), ContentId::of(b"asset"), [1u8; 32], true);
+        registry.register_data_asset(asset.clone()).unwrap();
+
+        let mut grant = forged_grant(&asset, addr(2), 1);
+        grant.authorized_by = Some(SaleAuthorizationId::from([7u8; 32]));
+
+        let err = registry
+            .create_access_grant(grant)
+            .expect_err("yetki-dayanaklı izin bu kapıdan girememeli");
+        assert!(
+            err.contains("must be issued via issue_grant_from_sale_authorization"),
+            "alınan: {err}"
+        );
     }
 }

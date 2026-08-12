@@ -205,6 +205,37 @@ impl SaleAuthorization {
         Ok(())
     }
 
+    /// Satıcının imzasını `signing_hash()` üzerinde kriptografik olarak
+    /// Doğrular.
+    ///
+    /// Strix bulgusu (HIGH, CWE-347): `validate_shape()` yalnızca sıfır
+    /// Sentinel'ini reddediyordu, yani sıfırdan farklı **herhangi** 64 bayt
+    /// Geçerli satıcı rızası sayılıyordu. Saldırgan `[1u8; 64]` yazıp başkasının
+    /// Varlığı için satış yetkisi kaydettirebiliyordu.
+    ///
+    /// B.U.D.'da adres, Ed25519 açık anahtarının ta kendisidir
+    /// (`Address::from(keypair.public_key_bytes())`, `core/transaction.rs:564`),
+    /// Bu yüzden ayrı bir anahtar kaydına gerek yok: `seller` alanı doğrulama
+    /// Anahtarıdır.
+    pub fn verify_seller_signature(&self) -> Result<(), String> {
+        if self.seller_signature.is_sentinel() {
+            return Err("SaleAuthorization seller_signature sentinel is invalid".into());
+        }
+        crate::crypto::primitives::verify_signature(
+            &self.signing_hash(),
+            &self.seller_signature.0,
+            self.seller.as_bytes(),
+        )
+        .map_err(|e| format!("SaleAuthorization seller_signature is not a valid signature by seller: {e}"))
+    }
+
+    /// Şekil kontrolü **ve** imza doğrulaması. Zincir/kayıt yolları bunu
+    /// Çağırmalı; çıplak `validate_shape()` yalnızca imza dışı alanları bakar.
+    pub fn validate_authenticated(&self) -> Result<(), String> {
+        self.validate_shape()?;
+        self.verify_seller_signature()
+    }
+
     pub fn can_issue(&self, current_block: u64) -> bool {
         current_block >= self.valid_from_block
             && current_block <= self.expires_at_block
@@ -349,6 +380,17 @@ pub struct AccessGrant {
     #[serde(default)]
     pub status: AccessGrantStatus,
     pub owner_signature: Signature64,
+    /// Bu izin, sahibin doğrudan imzası yerine kayıtlı bir
+    /// [`SaleAuthorization`] üzerinden türetildiyse o yetkinin kimliği.
+    ///
+    /// `None` = doğrudan sahip imzası; `owner_signature` kriptografik olarak
+    /// Doğrulanır. `Some(id)` = yetki-dayanaklı izin; sahiplik rızası, kayıt
+    /// Sırasında satıcı imzası doğrulanmış olan o yetkiden gelir. Bu ayrım
+    /// Alanın kendisinde durur, çünkü iki durumda *neyin* doğrulandığı
+    /// Farklıdır ve bunu çağıranın hatırlamasına bırakmak, bulgunun ta
+    /// Kendisiydi.
+    #[serde(default)]
+    pub authorized_by: Option<SaleAuthorizationId>,
 }
 
 impl AccessGrant {
@@ -389,6 +431,7 @@ impl AccessGrant {
             purpose_hash,
             status: AccessGrantStatus::Active,
             owner_signature: Signature64::SENTINEL,
+            authorized_by: None,
         }
     }
 
@@ -437,7 +480,7 @@ impl AccessGrant {
         if self.max_reads == 0 {
             return Err("AccessGrant max_reads must be >= 1".into());
         }
-        if self.owner_signature.is_sentinel() {
+        if self.authorized_by.is_none() && self.owner_signature.is_sentinel() {
             return Err("AccessGrant owner_signature sentinel is invalid".into());
         }
         let expected = Self::derive_id(
@@ -455,6 +498,64 @@ impl AccessGrant {
             return Err("AccessGrant grant_id does not match canonical preimage".into());
         }
         Ok(())
+    }
+
+    /// Sahibin imzaladığı kanonik özet. `owner_signature`, değişebilen
+    /// `reads_used` ve `status` alanları kasten dışarıda: imza izin verilen
+    /// *şekli* bağlar, o iznin çalışma-zamanı sayaçlarını değil.
+    pub fn signing_hash(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"BDLM_POLLEN_ACCESS_GRANT_SIGNING_V1");
+        hasher.update(self.grant_id.0);
+        hasher.update(self.asset_id.0);
+        hasher.update(self.owner.as_bytes());
+        hasher.update(self.grantee.as_bytes());
+        hasher.update(self.payer.as_bytes());
+        hasher.update(self.price_paid.to_le_bytes());
+        hasher.update(self.issued_at_block.to_le_bytes());
+        hasher.update(self.expires_at_block.to_le_bytes());
+        hasher.update(self.max_reads.to_le_bytes());
+        hasher.update(self.purpose_hash);
+        // Yetki-kaynağı imzanın kapsamında: aksi halde saldırgan, sahibin
+        // İmzaladığı bir izni alıp `authorized_by`'ı doldurarak imza
+        // Kontrolünü atlatabilirdi.
+        match &self.authorized_by {
+            None => hasher.update([0u8]),
+            Some(id) => {
+                hasher.update([1u8]);
+                hasher.update(id.0);
+            }
+        }
+        hasher.finalize().into()
+    }
+
+    /// Sahibin imzasını `signing_hash()` üzerinde kriptografik olarak doğrular.
+    /// Gerekçe [`SaleAuthorization::verify_seller_signature`] ile aynı: sıfır
+    /// Olmayan rastgele baytlar rıza değildir.
+    pub fn verify_owner_signature(&self) -> Result<(), String> {
+        if self.authorized_by.is_some() {
+            // Yetki-dayanaklı izinde imzalanan şey bu izin değil, ona kaynak
+            // Olan satış yetkisidir; o imza `MarketplaceRegistry` tarafından
+            // Yetki kaydedilirken doğrulanmıştır. Bu izinler yalnızca
+            // `issue_grant_from_sale_authorization` üzerinden üretilir;
+            // `create_access_grant` dışarıdan gelen böyle bir izni reddeder.
+            return Ok(());
+        }
+        if self.owner_signature.is_sentinel() {
+            return Err("AccessGrant owner_signature sentinel is invalid".into());
+        }
+        crate::crypto::primitives::verify_signature(
+            &self.signing_hash(),
+            &self.owner_signature.0,
+            self.owner.as_bytes(),
+        )
+        .map_err(|e| format!("AccessGrant owner_signature is not a valid signature by owner: {e}"))
+    }
+
+    /// Şekil kontrolü **ve** imza doğrulaması.
+    pub fn validate_authenticated(&self) -> Result<(), String> {
+        self.validate_shape()?;
+        self.verify_owner_signature()
     }
 
     pub fn is_active_for(&self, grantee: &Address, current_block: u64) -> bool {
@@ -541,8 +642,16 @@ impl AiDataInputRef {
 mod tests {
     use super::*;
 
+    /// B.U.D. adresi = Ed25519 açık anahtarı, bu yüzden test adresleri de
+    /// Gerçek anahtarlardan türetilmeli; aksi halde imza doğrulaması hiçbir
+    /// Testte sınanamaz.
+    fn keypair(byte: u8) -> crate::crypto::primitives::KeyPair {
+        crate::crypto::primitives::KeyPair::from_seed(&[byte; 32])
+            .expect("deterministik test tohumu geçerli bir Ed25519 anahtarı vermeli")
+    }
+
     fn addr(byte: u8) -> Address {
-        Address::from([byte; 32])
+        Address::from(keypair(byte).public_key_bytes())
     }
 
     #[test]
@@ -661,5 +770,109 @@ mod tests {
         let mut malformed = POLLEN_AI_INPUT_REF_PREFIX.to_vec();
         malformed.push(1);
         assert!(AiDataInputRef::decode(&malformed).is_err());
+    }
+
+    /// İmza doğrulaması gerçekten çalışıyor: sahibin kendi anahtarıyla
+    /// İmzaladığı izin geçerli, tek bayt değiştirilmiş hali geçersiz.
+    #[test]
+    fn an_owner_signed_grant_verifies_and_a_tampered_one_does_not() {
+        let owner = keypair(1);
+        let mut grant = AccessGrant::new_unsigned(
+            AssetId::from([3u8; 32]),
+            Address::from(owner.public_key_bytes()),
+            addr(2),
+            addr(2),
+            10,
+            1,
+            10,
+            1,
+            [7u8; 32],
+        );
+        grant.owner_signature = Signature64::from(owner.sign(&grant.signing_hash()));
+        grant
+            .validate_authenticated()
+            .expect("sahibin kendi imzası doğrulanmalı");
+
+        let mut bad = grant.clone();
+        bad.owner_signature.0[0] ^= 0x01;
+        assert!(
+            bad.validate_authenticated().is_err(),
+            "tek bayt bozulmuş imza reddedilmeli"
+        );
+    }
+
+    /// Sıfır olmayan uydurma baytlar rıza sayılmaz - bulgunun özü.
+    #[test]
+    fn nonzero_garbage_is_not_a_signature() {
+        let mut auth = SaleAuthorization::new_unsigned(
+            AssetId::from([6u8; 32]),
+            addr(1),
+            99,
+            10,
+            20,
+            2,
+            [3u8; 32],
+        );
+        auth.seller_signature = Signature64::from([1u8; 64]);
+        // Şekil kontrolü geçer - o katman imza bilmez.
+        assert!(auth.validate_shape().is_ok());
+        // Kimlik doğrulamalı kontrol geçmez.
+        let err = auth
+            .validate_authenticated()
+            .expect_err("uydurma baytlar geçerli satıcı imzası sayılmamalı");
+        assert!(err.contains("not a valid signature by seller"), "alınan: {err}");
+    }
+
+    /// Yetki-dayanaklı izinde sentinel imza meşrudur; rıza kaynağı ayrı
+    /// Alanda kayıtlıdır ve imza doğrulaması o yetkinin kaydında yapılmıştır.
+    #[test]
+    fn an_authorization_backed_grant_may_carry_no_signature() {
+        let mut grant = AccessGrant::new_unsigned(
+            AssetId::from([3u8; 32]),
+            addr(1),
+            addr(2),
+            addr(2),
+            10,
+            1,
+            10,
+            1,
+            [7u8; 32],
+        );
+        grant.authorized_by = Some(SaleAuthorizationId::from([5u8; 32]));
+        grant.grant_id = AccessGrant::derive_id(
+            &grant.asset_id,
+            &grant.owner,
+            &grant.grantee,
+            &grant.payer,
+            grant.price_paid,
+            grant.issued_at_block,
+            grant.expires_at_block,
+            grant.max_reads,
+            &grant.purpose_hash,
+        );
+        grant
+            .validate_authenticated()
+            .expect("yetki-dayanaklı izin kendi imzasını taşımak zorunda değil");
+    }
+
+    /// Yetki kaynağı imzanın kapsamında: `authorized_by` değişince özet de
+    /// Değişmeli, yoksa sahibin imzaladığı bir izin yetki-dayanaklıya
+    /// Dönüştürülüp imza kontrolü atlatılabilirdi.
+    #[test]
+    fn the_authorization_source_is_bound_by_the_signing_hash() {
+        let mut grant = AccessGrant::new_unsigned(
+            AssetId::from([3u8; 32]),
+            addr(1),
+            addr(2),
+            addr(2),
+            10,
+            1,
+            10,
+            1,
+            [7u8; 32],
+        );
+        let direct = grant.signing_hash();
+        grant.authorized_by = Some(SaleAuthorizationId::from([5u8; 32]));
+        assert_ne!(direct, grant.signing_hash());
     }
 }
