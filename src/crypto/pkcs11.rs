@@ -489,6 +489,30 @@ impl ConsensusSigner for Pkcs11Signer {
     }
 
     fn bls_sign(&self, msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        // Katı satıcı-yerel kip fail-CLOSED olmalıdır. Eski akış yalnızca bir
+        // satıcı mekanizması yapılandırılmış *ve* satıcı imzası hata döndürmüş
+        // olduğunda politikayı uyguluyordu; mekanizma hiç ayarlanmamışsa ya da
+        // HSM oturumu açılmamışsa sessizce yazılım anahtarına düşüyordu. Bu,
+        // "satıcı-yerel zorunlu" diyen bir dağıtımın farkında olmadan yazılım
+        // BLS imzası üretmesi demekti (CWE-636).
+        if self.strict_vendor_native {
+            if self.bls_mechanism.is_none() {
+                return Err(CryptoError::Signing(
+                    "vendor-native BLS signing required, but no vendor BLS mechanism is configured"
+                        .into(),
+                ));
+            }
+            let session_present = self
+                .inner
+                .lock()
+                .map_err(|_| CryptoError::Signing("HSM mutex".into()))?
+                .is_some();
+            if !session_present {
+                return Err(CryptoError::Signing(
+                    "vendor-native BLS signing required, but no HSM session is open".into(),
+                ));
+            }
+        }
         if let Some(mech_id) = self.bls_mechanism {
             let guard = self
                 .inner
@@ -519,6 +543,30 @@ impl ConsensusSigner for Pkcs11Signer {
     }
 
     fn pq_sign(&self, msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        // Katı satıcı-yerel kip fail-CLOSED olmalıdır. Eski akış yalnızca bir
+        // satıcı mekanizması yapılandırılmış *ve* satıcı imzası hata döndürmüş
+        // olduğunda politikayı uyguluyordu; mekanizma hiç ayarlanmamışsa ya da
+        // HSM oturumu açılmamışsa sessizce yazılım anahtarına düşüyordu. Bu,
+        // "satıcı-yerel zorunlu" diyen bir dağıtımın farkında olmadan yazılım
+        // PQ imzası üretmesi demekti (CWE-636).
+        if self.strict_vendor_native {
+            if self.pq_mechanism.is_none() {
+                return Err(CryptoError::Signing(
+                    "vendor-native PQ signing required, but no vendor PQ mechanism is configured"
+                        .into(),
+                ));
+            }
+            let session_present = self
+                .inner
+                .lock()
+                .map_err(|_| CryptoError::Signing("HSM mutex".into()))?
+                .is_some();
+            if !session_present {
+                return Err(CryptoError::Signing(
+                    "vendor-native PQ signing required, but no HSM session is open".into(),
+                ));
+            }
+        }
         if let Some(mech_id) = self.pq_mechanism {
             let guard = self
                 .inner
@@ -570,6 +618,24 @@ impl ConsensusSigner for Pkcs11Signer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bağlantısız (HSM oturumu olmayan) bir imzalayıcı. Katı kip politikası
+    /// oturumdan ve satıcı mekanizmasından bağımsız olarak uygulanmalı; bu
+    /// yardımcı tam da o yolu, gerçek bir token olmadan sınamayı sağlar.
+    fn unconnected_signer() -> Pkcs11Signer {
+        Pkcs11Signer {
+            module_path: String::new(),
+            slot_id: 0,
+            token_pin_env: String::new(),
+            public_key_bytes: [0u8; 32],
+            bls_key: Mutex::new(None),
+            pq_key: Mutex::new(None),
+            inner: Mutex::new(None),
+            bls_mechanism: None,
+            pq_mechanism: None,
+            strict_vendor_native: false,
+        }
+    }
 
     #[test]
     fn test_pkcs11_parse_mechanism_hex_and_dec() {
@@ -927,5 +993,47 @@ mod vendor_tests {
             check_mechanism_admissible_for_mainnet(id, &caps)
                 .expect("the vendor's own documented signing mechanisms must pass");
         }
+    }
+
+    /// Katı satıcı-yerel kip, mekanizma hiç yapılandırılmamışken de kapanmalı.
+    ///
+    /// Bulgunun özü buydu: `require_vendor_native_signing()` çağıran bir
+    /// dağıtım, `PKCS11_BLS_MECHANISM` ortam değişkenini vermeyi unutursa
+    /// eski kod hiç uyarı vermeden yazılım BLS anahtarıyla imzalıyordu. Politika
+    /// yalnızca "satıcı denendi ve başarısız oldu" dalında uygulanıyordu.
+    #[test]
+    fn strict_mode_without_a_vendor_mechanism_refuses_to_sign() {
+        let signer = unconnected_signer().require_vendor_native_signing();
+
+        let bls = signer
+            .bls_sign(b"blok")
+            .expect_err("katı kipte yapılandırılmamış BLS mekanizması imzalamamalı");
+        assert!(
+            format!("{bls:?}").contains("no vendor BLS mechanism is configured"),
+            "reddin gerekçesi eksik mekanizmayı adlandırmalı: {bls:?}"
+        );
+
+        let pq = signer
+            .pq_sign(b"blok")
+            .expect_err("katı kipte yapılandırılmamış PQ mekanizması imzalamamalı");
+        assert!(
+            format!("{pq:?}").contains("no vendor PQ mechanism is configured"),
+            "reddin gerekçesi eksik mekanizmayı adlandırmalı: {pq:?}"
+        );
+    }
+
+    /// Gevşek kip (varsayılan) davranışını değiştirmediğimizin kanıtı: katı
+    /// bayrak yokken eksik mekanizma bir hata değil, yalnızca yazılım yoluna
+    /// geçiş sebebidir - orada da anahtar yoksa zaten ayrı bir hata döner.
+    #[test]
+    fn default_mode_still_falls_through_to_the_software_path() {
+        let signer = unconnected_signer();
+        let err = signer
+            .bls_sign(b"blok")
+            .expect_err("anahtarsız yazılım yolu kendi hatasını vermeli");
+        assert!(
+            format!("{err:?}").contains("No BLS key in HSM"),
+            "gevşek kipte hata yazılım yolundan gelmeli, politikadan değil: {err:?}"
+        );
     }
 }
