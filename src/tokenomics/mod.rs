@@ -284,7 +284,12 @@ pub struct TokenomicsAddresses {
     pub community: Address,
     pub liquidity: Address,
     pub ecosystem: Address,
+    /// Takımın *harcanabilir* hesabı. Genesis'te boştur; buraya yalnızca
+    /// [`Self::team_vesting`] hesabından hakediş çözüldükçe para gelir.
     pub team: Address,
+    /// Takım tahsisinin kilitli tutulduğu ayrı hesap. Genesis'te tüm takım
+    /// payı buraya yazılır; cliff/vesting bu hesaptan çıkışı yönetir.
+    pub team_vesting: Address,
     pub burn_reserve: Address,
 }
 
@@ -305,7 +310,8 @@ impl TokenomicsAddresses {
             liquidity: mk(2),
             ecosystem: mk(3),
             team: mk(4),
-            burn_reserve: mk(5),
+            team_vesting: mk(5),
+            burn_reserve: mk(6),
         }
     }
 
@@ -314,7 +320,9 @@ impl TokenomicsAddresses {
             Allocation::Community => self.community,
             Allocation::Liquidity => self.liquidity,
             Allocation::Ecosystem => self.ecosystem,
-            Allocation::Team => self.team,
+            // Takım tahsisi genesis'te kilitli hesaba gider; harcanabilir
+            // `team` hesabına ancak hakediş çözüldükçe para aktarılır.
+            Allocation::Team => self.team_vesting,
             Allocation::BurnReserve => self.burn_reserve,
         }
     }
@@ -327,9 +335,14 @@ impl TokenomicsAddresses {
 /// - Liquidity + Community: immediately liquid at genesis.
 /// - Ecosystem: allocated to its account (treated as locked/governed off this
 ///   Module's scope - held in a distinct account).
-/// - Team: allocated to the team account but subject to [`VestingSchedule`]
-///   (see [`TokenomicsParams::team_vesting`]); consumers enforce vesting when
-///   Moving funds.
+/// - Team: allocated to a *dedicated vesting account* at genesis, not to the
+///   Spendable team account. Bu, Strix bulgusunun düzeltmesidir: belge 1 yıl
+///   Cliff / 4 yıl hakediş vaat ederken kod tüm takım payını genesis'te
+///   Harcanabilir hesaba yazıyordu, yani hakediş yalnızca yorum satırıydı
+///   (CWE-841). Artık bakiye ayrı bir adreste durur ve
+///   [`TokenomicsParams::team_vesting`] tablosuna göre çözülür; hakedişi
+///   Uygulamayan bir tüketici yanlışlıkla takım parasına erişemez, çünkü
+///   Harcanabilir hesap genesis'te sıfırdır.
 /// - BurnReserve: held in the reserve account, consumed by the timed burn.
 pub fn genesis_allocations(
     params: &TokenomicsParams,
@@ -339,7 +352,7 @@ pub fn genesis_allocations(
         (addrs.community, params.community),
         (addrs.liquidity, params.liquidity),
         (addrs.ecosystem, params.ecosystem),
-        (addrs.team, params.team),
+        (addrs.team_vesting, params.team),
         (addrs.burn_reserve, params.burn_reserve),
     ]
 }
@@ -622,5 +635,77 @@ mod tests {
             schedule.validate().is_ok(),
             "default pools must stay within the fixed supply"
         );
+    }
+
+    /// Strix bulgusunun (HIGH, CWE-841) regresyon testi.
+    ///
+    /// Belge 1 yıl cliff / 4 yıl hakediş vaat ederken `genesis_allocations()`
+    /// takım payının tamamını harcanabilir `team` hesabına yazıyordu; hakediş
+    /// tablosu yalnızca hesaplanan, hiçbir yerde uygulanmayan bir değerdi.
+    #[test]
+    fn genesis_does_not_credit_the_spendable_team_account() {
+        let params = TokenomicsParams::default();
+        let addrs = TokenomicsAddresses::reserved();
+        let allocs = genesis_allocations(&params, &addrs);
+
+        let spendable: u64 = allocs
+            .iter()
+            .filter(|(a, _)| *a == addrs.team)
+            .map(|(_, v)| *v)
+            .sum();
+        assert_eq!(
+            spendable, 0,
+            "takımın harcanabilir hesabı genesis'te boş olmalı, {spendable} bulundu"
+        );
+
+        let locked: u64 = allocs
+            .iter()
+            .filter(|(a, _)| *a == addrs.team_vesting)
+            .map(|(_, v)| *v)
+            .sum();
+        assert_eq!(
+            locked, params.team,
+            "takım payının tamamı kilitli hakediş hesabında olmalı"
+        );
+    }
+
+    /// Kilitli hesap ayrı bir adres olmalı; aynı adres olursa ayrım yalnızca
+    /// İsimden ibaret kalır ve bulgu geri döner.
+    #[test]
+    fn the_vesting_account_is_a_distinct_address() {
+        let a = TokenomicsAddresses::reserved();
+        assert_ne!(a.team, a.team_vesting);
+        for other in [a.community, a.liquidity, a.ecosystem, a.burn_reserve] {
+            assert_ne!(
+                a.team_vesting, other,
+                "hakediş hesabı başka bir tahsis hesabıyla çakışıyor"
+            );
+        }
+    }
+
+    /// Yeni adresin eklenmesi arz toplamını bozmamalı: kilitli hesap takım
+    /// Payını *taşır*, ona eklemez.
+    #[test]
+    fn moving_the_team_allocation_preserves_total_supply() {
+        let params = TokenomicsParams::default();
+        let addrs = TokenomicsAddresses::reserved();
+        let total: u64 = genesis_allocations(&params, &addrs)
+            .iter()
+            .map(|(_, v)| *v)
+            .sum();
+        assert_eq!(total, BUD_TOTAL_SUPPLY);
+    }
+
+    /// Hakediş tablosu kilitli bakiyeyle aynı toplamı anlatmalı ve cliff
+    /// Öncesinde hiçbir şey çözülmemeli.
+    #[test]
+    fn the_schedule_locks_the_whole_allocation_before_the_cliff() {
+        let params = TokenomicsParams::default();
+        let v = params.team_vesting(0);
+        assert_eq!(v.total, params.team);
+        assert_eq!(v.unlocked_at(0), 0);
+        assert_eq!(v.unlocked_at(params.team_cliff_epochs - 1), 0);
+        assert_eq!(v.locked_at(0), params.team);
+        assert_eq!(v.unlocked_at(params.team_cliff_epochs + params.team_vesting_epochs), params.team);
     }
 }
