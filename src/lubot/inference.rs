@@ -92,6 +92,12 @@ pub fn build_lubot_request(
 }
 
 /// Lubot çıkarım sonucunu inşa et (operator'ün yanıtı).
+///
+/// Dönen sonuç **imzasızdır**: `AiRegistry::submit_result` artık doğrulayıcı
+/// İmzası istiyor (Strix bulgusu, HIGH, CWE-863), bu yüzden çağıranın kendi
+/// Anahtarıyla [`AiInferenceResult::sign`] çağırması gerekir. İmzayı burada
+/// Atmıyoruz çünkü bu fonksiyonun özel anahtara erişimi yok ve olmamalı.
+/// İmzasız gönderim artık kayıt katmanında reddedilir.
 pub fn build_lubot_result(
     request_id: AiRequestId,
     verifier: Address,
@@ -120,8 +126,15 @@ mod tests {
     use super::super::{operator_bond, operator_eligible, register_operator, MIN_OPERATOR_BOND};
     use super::*;
 
+    /// Deterministik test anahtarı; adres = Ed25519 açık anahtarı olduğu için
+    /// İmza üretebilmek adına adresler artık anahtardan türetiliyor.
+    fn keypair(b: u8) -> crate::crypto::primitives::KeyPair {
+        crate::crypto::primitives::KeyPair::from_seed(&[b; 32])
+            .expect("deterministik test tohumu geçerli anahtar vermeli")
+    }
+
     fn addr(b: u8) -> Address {
-        Address([b; 32])
+        Address::from(keypair(b).public_key_bytes())
     }
 
     /// Gerçek AiRegistry üzerinde uçtan-uca Lubot çıkarım akışı.
@@ -157,13 +170,99 @@ mod tests {
         assert!(req.verify_id(), "canonical request_id must verify");
         let req_id = registry.submit_request(req, 1).expect("submit request");
 
-        // (4) Result inşa + submit.
-        let res = build_lubot_result(req_id, operator, b"lubot-output".to_vec(), 1, 2)
+        // (4) Result inşa + operator'ün kendi anahtarıyla imzala + submit.
+        let mut res = build_lubot_result(req_id, operator, b"lubot-output".to_vec(), 1, 2)
             .expect("build result");
+        res.sign(&keypair(2)).expect("operator kendi sonucunu imzalar");
         let outcome = registry.submit_result(res, 2);
         assert!(
             outcome.is_ok(),
             "result submission should succeed: {outcome:?}"
+        );
+    }
+
+    /// Strix bulgusunun (HIGH, CWE-863) regresyonu: imzasız sonuç kabul
+    /// Edilmemeli. Eskiden `signature: Vec::new()` ile gelen sonuç doğrudan
+    /// Sayıma giriyor ve `agreement_threshold = 1` olduğu için anında nihai
+    /// Oluyordu.
+    #[test]
+    fn an_unsigned_result_is_refused() {
+        let mut registry = AiRegistry::new();
+        let owner = addr(1);
+        let operator = addr(2);
+        let requester = addr(3);
+
+        let model_id =
+            register_lubot_model(&mut registry, owner, [9u8; 32]).expect("model register");
+        register_operator(&mut registry, &operator, MIN_OPERATOR_BOND).expect("operator bond");
+
+        let grant = test_grant(requester, 1);
+        let req =
+            build_lubot_request(requester, model_id, b"in".to_vec(), 1, 1, 1000, &grant).unwrap();
+        let req_id = registry.submit_request(req, 1).unwrap();
+
+        let res = build_lubot_result(req_id, operator, b"out".to_vec(), 1, 2).unwrap();
+        let err = registry
+            .submit_result(res, 2)
+            .expect_err("imzasız sonuç reddedilmeli");
+        assert!(err.contains("carries no verifier signature"), "alınan: {err}");
+    }
+
+    /// Teminatsız (dolayısıyla yetkisiz) bir adres, geçerli imzayla bile
+    /// Sonuç gönderemez.
+    #[test]
+    fn an_unstaked_verifier_cannot_submit_even_with_a_valid_signature() {
+        let mut registry = AiRegistry::new();
+        let owner = addr(1);
+        let operator = addr(2);
+        let intruder = addr(7);
+        let requester = addr(3);
+
+        let model_id =
+            register_lubot_model(&mut registry, owner, [9u8; 32]).expect("model register");
+        register_operator(&mut registry, &operator, MIN_OPERATOR_BOND).expect("operator bond");
+
+        let grant = test_grant(requester, 1);
+        let req =
+            build_lubot_request(requester, model_id, b"in".to_vec(), 1, 1, 1000, &grant).unwrap();
+        let req_id = registry.submit_request(req, 1).unwrap();
+
+        let mut res = build_lubot_result(req_id, intruder, b"out".to_vec(), 1, 2).unwrap();
+        res.sign(&keypair(7)).expect("davetsiz misafir de imzalayabilir");
+        let err = registry
+            .submit_result(res, 2)
+            .expect_err("yetkisiz doğrulayıcı reddedilmeli");
+        assert!(err.contains("is not authorized"), "alınan: {err}");
+    }
+
+    /// Başkasının adına sonuç gönderilemez: imza `verifier` alanına bağlıdır.
+    #[test]
+    fn a_result_cannot_be_submitted_on_behalf_of_another_verifier() {
+        let mut registry = AiRegistry::new();
+        let owner = addr(1);
+        let operator = addr(2);
+        let requester = addr(3);
+
+        let model_id =
+            register_lubot_model(&mut registry, owner, [9u8; 32]).expect("model register");
+        register_operator(&mut registry, &operator, MIN_OPERATOR_BOND).expect("operator bond");
+
+        let grant = test_grant(requester, 1);
+        let req =
+            build_lubot_request(requester, model_id, b"in".to_vec(), 1, 1, 1000, &grant).unwrap();
+        let req_id = registry.submit_request(req, 1).unwrap();
+
+        // Yetkili operator'ü verifier gösterir, ama kendi anahtarıyla imzalar.
+        let mut res = build_lubot_result(req_id, operator, b"out".to_vec(), 1, 2).unwrap();
+        res.signature = keypair(7)
+            .sign(&res.calculate_signing_hash())
+            .to_vec();
+        let err = registry
+            .submit_result(res, 2)
+            .expect_err("başka anahtarın imzası kabul edilmemeli");
+        assert!(
+            err.contains("not valid for the named verifier"),
+            "alınan: {err}"
         );
     }
 

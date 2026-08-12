@@ -226,6 +226,37 @@ impl AiRegistry {
             Some(s) => s.clone(),
             None => return Err("Associated model for request not found".into()),
         };
+
+        // --- Doğrulayıcı yetkilendirmesi (Strix bulgusu, HIGH, CWE-863) ---
+        //
+        // `result.verifier` çağıranın beyanıdır. Eskiden hiçbir yetki kontrolü
+        // Yapılmadan sonuç sayıma dahil ediliyordu: `is_verifier_authorized`,
+        // Asgari teminat ve gönderici sahipliği kontrol edilmiyordu. Modelin
+        // `agreement_threshold` değeri 1 olduğunda (Lubot'un varsayılanı) tek
+        // Sahte gönderim anında nihai sonuç oluyordu.
+        //
+        // Üç kapı, en ucuzdan en pahalıya:
+        //   1) yetki: beyaz liste kipindeyse listede olmak, değilse teminatlı
+        //      olmak;
+        //   2) asgari teminat: yetki kontrolü yalnızca "teminat kaydı var mı"
+        //      diye bakar, miktara bakmaz - 1 birim teminatla doğrulayıcı
+        //      olunmamalı;
+        //   3) kimlik bağlama: sonucun içindeki imza, `verifier` alanının
+        //      sahibi tarafından atılmış olmalı.
+        if !self.is_verifier_authorized(&result.verifier) {
+            return Err(format!(
+                "Verifier {} is not authorized to submit results",
+                result.verifier.to_hex()
+            ));
+        }
+        let stake = self.verifier_stake(&result.verifier);
+        if stake < MIN_VERIFIER_STAKE {
+            return Err(format!(
+                "Verifier stake {stake} is below the {MIN_VERIFIER_STAKE} minimum"
+            ));
+        }
+        result.verify_signature()?;
+
         if result.output_ref.len() as u64 > spec.max_output_ref_bytes {
             return Err("output_ref exceeds model specification limits".into());
         }

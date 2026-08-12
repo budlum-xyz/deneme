@@ -331,12 +331,22 @@ impl AiInferenceResult {
     /// Same `request_id`, and a signature over this digest would verify on
     /// Both. Today the transaction envelope is what stops that.
     ///
-    /// Anyone wiring this into verification must add `chain_id` to the
-    /// Preimage first, or the inner signature will be replayable between
-    /// Networks in a way the outer one is not.
+    /// Bu uyarı artık uygulanmış durumda: `chain_id` aşağıda ön-görüntüye
+    /// Katıldı ve etki alanı etiketi `..._V2` oldu. Sebep, Strix bulgusunun
+    /// (HIGH, CWE-863) düzeltmesiyle bu özetin *yük taşır* hale gelmesi -
+    /// `AiRegistry::submit_result` artık imzayı doğruluyor, dolayısıyla
+    /// Zincirler arası tekrar oynatma teorik olmaktan çıkıp gerçek bir yol
+    /// Olurdu.
     pub fn calculate_signing_hash(&self) -> [u8; 32] {
+        self.calculate_signing_hash_for_chain(crate::core::transaction::DEFAULT_CHAIN_ID)
+    }
+
+    /// Verilen ağ için imza özeti. `chain_id` ön-görüntüde olduğu için
+    /// Testnet'te atılmış bir imza mainnet'te doğrulanmaz.
+    pub fn calculate_signing_hash_for_chain(&self, chain_id: u64) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(b"BDLM_AI_RESULT_SIG_V1");
+        hasher.update(b"BDLM_AI_RESULT_SIG_V2");
+        hasher.update(chain_id.to_le_bytes());
         hasher.update(self.request_id.0);
         hasher.update(self.verifier.as_bytes());
         hasher.update(self.output_commitment);
@@ -344,6 +354,51 @@ impl AiInferenceResult {
         hasher.update(self.result_nonce.to_le_bytes());
         hasher.update(self.submitted_at_block.to_le_bytes());
         hasher.finalize().into()
+    }
+
+    /// Sonucun, `verifier` alanının sahibi tarafından imzalandığını doğrular.
+    ///
+    /// B.U.D.'da adres Ed25519 açık anahtarının ta kendisidir
+    /// (`Address::from(keypair.public_key_bytes())`), bu yüzden ayrı bir
+    /// Anahtar kaydına gerek yoktur: `verifier` alanı doğrulama anahtarıdır.
+    ///
+    /// Bulgudan önce bu alan hiç okunmuyordu (`signature: Vec::new()` ile
+    /// Gönderilen sonuçlar bile kabul ediliyordu); artık `submit_result`
+    /// Bunu çağırıyor.
+    pub fn verify_signature(&self) -> Result<(), String> {
+        self.verify_signature_for_chain(crate::core::transaction::DEFAULT_CHAIN_ID)
+    }
+
+    pub fn verify_signature_for_chain(&self, chain_id: u64) -> Result<(), String> {
+        if self.signature.is_empty() {
+            return Err("AiInferenceResult carries no verifier signature".into());
+        }
+        crate::crypto::primitives::verify_signature(
+            &self.calculate_signing_hash_for_chain(chain_id),
+            &self.signature,
+            self.verifier.as_bytes(),
+        )
+        .map_err(|e| format!("AiInferenceResult signature is not valid for the named verifier: {e}"))
+    }
+
+    /// Sonucu `keypair` ile imzalar. Anahtarın açık kısmı `verifier` alanıyla
+    /// Eşleşmezse imza doğrulamada düşeceği için burada erkenden reddedilir.
+    pub fn sign(&mut self, keypair: &crate::crypto::primitives::KeyPair) -> Result<(), String> {
+        self.sign_for_chain(keypair, crate::core::transaction::DEFAULT_CHAIN_ID)
+    }
+
+    pub fn sign_for_chain(
+        &mut self,
+        keypair: &crate::crypto::primitives::KeyPair,
+        chain_id: u64,
+    ) -> Result<(), String> {
+        if self.verifier.as_bytes() != &keypair.public_key_bytes() {
+            return Err("signing key does not match the result's verifier address".into());
+        }
+        self.signature = keypair
+            .sign(&self.calculate_signing_hash_for_chain(chain_id))
+            .to_vec();
+        Ok(())
     }
 
     pub fn calculate_leaf(&self) -> [u8; 32] {

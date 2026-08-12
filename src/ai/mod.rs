@@ -26,6 +26,55 @@ pub use types::{
 mod tests {
     use super::*;
     use crate::core::address::Address;
+    use crate::crypto::primitives::KeyPair;
+
+    /// B.U.D.'da adres = Ed25519 açık anahtarı
+    /// (`Address::from(keypair.public_key_bytes())`, `core/transaction.rs:564`).
+    ///
+    /// `submit_result` artık doğrulayıcı imzası istediği için (Strix bulgusu,
+    /// HIGH, CWE-863) test adresleri de gerçek anahtarlardan türetilmek
+    /// Zorunda. Eskiden `Address::from_hex("..11")` gibi özel anahtarı olmayan
+    /// Sabitler kullanılıyordu; imza yolunu hiçbir testin sınayamamasının
+    /// Sebebi buydu.
+    fn key(tag: u8) -> KeyPair {
+        KeyPair::from_seed(&[tag; 32]).expect("deterministik test tohumu geçerli anahtar verir")
+    }
+
+    fn actor(tag: u8) -> Address {
+        Address::from(key(tag).public_key_bytes())
+    }
+
+    /// Bir adresin hangi test etiketinden geldiğini bulur. Etiket uzayı 256
+    /// Değerle sınırlı ve `actor` deterministik olduğu için ters arama
+    /// Mümkün; bu, her çağrı yerine elle etiket taşımaktan daha az kırılgan.
+    fn tag_of(address: &Address) -> Option<u8> {
+        (0u8..=255).find(|t| &actor(*t) == address)
+    }
+
+    /// Sonucu, `verifier` alanının sahibi olan anahtarla imzalayıp gönderir ve
+    /// Gerekiyorsa o doğrulayıcıya asgari teminatı kilitler.
+    ///
+    /// Bu testlerin niyeti "şu sonuç kabul edilir mi" sorusuydu; yetkilendirme
+    /// Ve imza artık her gönderimin ön koşulu olduğu için mekaniği tek yere
+    /// Topluyoruz. Yetkilendirmenin *kendisini* sınayan testler
+    /// `registry.submit_result` çağrısını doğrudan kullanır.
+    fn submit_signed(
+        registry: &mut AiRegistry,
+        mut result: AiInferenceResult,
+        block: u64,
+    ) -> Result<Option<AiInferenceOutcome>, String> {
+        let tag = tag_of(&result.verifier)
+            .expect("test doğrulayıcısı `actor(tag)` ile üretilmiş olmalı");
+        if registry.verifier_stake(&result.verifier) < crate::ai::registry::MIN_VERIFIER_STAKE {
+            registry
+                .lock_verifier_stake(&result.verifier, crate::ai::registry::MIN_VERIFIER_STAKE)
+                .expect("teminat kilitlenebilmeli");
+        }
+        result
+            .sign(&key(tag))
+            .expect("imza anahtarı verifier alanıyla eşleşmeli");
+        submit_signed(&mut registry, result, block)
+    }
 
     #[test]
     fn test_ai_model_registration_and_validation() {
@@ -34,8 +83,7 @@ mod tests {
         assert_eq!(registry.state_root(), [0u8; 32]);
 
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         let spec = AiModelSpec {
             model_id,
@@ -65,8 +113,7 @@ mod tests {
     fn test_ai_inference_lifecycle_threshold_agreement() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         let spec = AiModelSpec {
             model_id,
@@ -89,8 +136,7 @@ mod tests {
         registry.register_model(spec).unwrap();
 
         let requester =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000002")
-                .unwrap();
+            actor(0x02);
         let mut req = AiInferenceRequest {
             request_id: AiRequestId::default(),
             requester,
@@ -109,8 +155,7 @@ mod tests {
 
         // Submit first result from verifier 1
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let res1 = AiInferenceResult {
             request_id: req_id,
             verifier: v1,
@@ -120,13 +165,12 @@ mod tests {
             signature: vec![1, 2, 3],
             submitted_at_block: 15,
         };
-        let outcome1 = registry.submit_result(res1, 15).unwrap();
+        let outcome1 = submit_signed(&mut registry, res1, 15).unwrap();
         assert!(outcome1.is_none()); // Threshold not reached yet (needs 2)
 
         // Submit second matching result from verifier 2
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         let res2 = AiInferenceResult {
             request_id: req_id,
             verifier: v2,
@@ -136,7 +180,7 @@ mod tests {
             signature: vec![4, 5, 6],
             submitted_at_block: 16,
         };
-        let outcome2 = registry.submit_result(res2, 16).unwrap();
+        let outcome2 = submit_signed(&mut registry, res2, 16).unwrap();
         assert!(outcome2.is_some());
         let finalized = outcome2.unwrap();
         assert_eq!(finalized.agreeing_verifiers.len(), 2);
@@ -149,8 +193,7 @@ mod tests {
         // And minority verifiers get zero reward without stake slashing.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -189,18 +232,15 @@ mod tests {
         let req_id = registry.submit_request(req, 5).unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         let v_minority =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000013")
-                .unwrap();
+            actor(0x13);
 
         // Minority verifier submits different commitment
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v_minority,
@@ -215,8 +255,8 @@ mod tests {
             .unwrap();
 
         // Majority verifiers submit consensus commitment
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v1,
@@ -230,8 +270,8 @@ mod tests {
             )
             .unwrap();
 
-        let outcome = registry
-            .submit_result(
+        let outcome = submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v2,
@@ -257,8 +297,7 @@ mod tests {
         // Request with deadline_block already passed must be rejected.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -310,8 +349,7 @@ mod tests {
         // Result submitted after request or result deadline must be rejected.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -350,11 +388,10 @@ mod tests {
         let req_id = registry.submit_request(req, 5).unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         // Current_block=200 > deadline_block=110 → MUST REJECT
-        let result = registry.submit_result(
+        let result = submit_signed(&mut registry,
             AiInferenceResult {
                 request_id: req_id,
                 verifier: v1,
@@ -381,8 +418,7 @@ mod tests {
         // Current_block=70 > 60 → MUST REJECT (even though deadline_block=110 not yet reached)
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -421,11 +457,10 @@ mod tests {
         let req_id = registry.submit_request(req, 5).unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         // Current_block=70 > submitted_at_block(10) + result_deadline_blocks(50) = 60
-        let result = registry.submit_result(
+        let result = submit_signed(&mut registry,
             AiInferenceResult {
                 request_id: req_id,
                 verifier: v1,
@@ -453,8 +488,7 @@ mod tests {
         // Same verifier submitting conflicting commitments = equivocation.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -493,12 +527,11 @@ mod tests {
         let req_id = registry.submit_request(req, 5).unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         // First result: commitment A
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v1,
@@ -513,7 +546,7 @@ mod tests {
             .unwrap();
 
         // Second result from SAME verifier: commitment B (DIFFERENT)
-        let equiv = registry.submit_result(
+        let equiv = submit_signed(&mut registry,
             AiInferenceResult {
                 request_id: req_id,
                 verifier: v1,
@@ -538,8 +571,7 @@ mod tests {
         // Same verifier submitting same commitment = duplicate (not equivocation).
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -578,12 +610,11 @@ mod tests {
         let req_id = registry.submit_request(req, 5).unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         // First submission
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v1,
@@ -598,7 +629,7 @@ mod tests {
             .unwrap();
 
         // Duplicate same commitment
-        let dup = registry.submit_result(
+        let dup = submit_signed(&mut registry,
             AiInferenceResult {
                 request_id: req_id,
                 verifier: v1,
@@ -623,8 +654,7 @@ mod tests {
         // Happy path: request accepted when current_block < deadline_block.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -673,8 +703,7 @@ mod tests {
         // Without reaching agreement threshold.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -698,8 +727,7 @@ mod tests {
             .unwrap();
 
         let requester =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000002")
-                .unwrap();
+            actor(0x02);
         let mut req = AiInferenceRequest {
             request_id: AiRequestId::default(),
             requester,
@@ -717,10 +745,9 @@ mod tests {
 
         // Only one verifier submitted (below threshold of 2) - no finalization
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
-        registry
-            .submit_result(
+            actor(0x11);
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v1,
@@ -750,8 +777,7 @@ mod tests {
         // Cannot reclaim fee before deadline expires.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -804,8 +830,7 @@ mod tests {
         // Cannot reclaim fee if request was already finalized (verifiers earned it).
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -829,11 +854,9 @@ mod tests {
             .unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
 
         let mut req = AiInferenceRequest {
             request_id: AiRequestId::default(),
@@ -851,8 +874,8 @@ mod tests {
         let req_id = registry.submit_request(req, 5).unwrap();
 
         // Both verifiers agree → finalization
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v1,
@@ -865,8 +888,8 @@ mod tests {
                 15,
             )
             .unwrap();
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v2,
@@ -895,8 +918,7 @@ mod tests {
         // Cannot reclaim fee twice for the same request.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -953,8 +975,7 @@ mod tests {
         // Result_nonce=0 must be rejected.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -993,11 +1014,10 @@ mod tests {
         let req_id = registry.submit_request(req, 5).unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         // Result_nonce=0 → MUST REJECT
-        let result = registry.submit_result(
+        let result = submit_signed(&mut registry,
             AiInferenceResult {
                 request_id: req_id,
                 verifier: v1,
@@ -1022,8 +1042,7 @@ mod tests {
         // Request submitted but zero results → reclaim should work after deadline.
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1074,8 +1093,7 @@ mod tests {
     fn test_p5_model_deactivation_by_owner() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1126,11 +1144,9 @@ mod tests {
     fn test_p5_model_deactivation_non_owner_rejected() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let other =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000002")
-                .unwrap();
+            actor(0x02);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1162,8 +1178,7 @@ mod tests {
     fn test_p5_model_reactivation() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1212,11 +1227,9 @@ mod tests {
     fn test_p5_callback_carried_to_outcome() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let callback_addr =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000099")
-                .unwrap();
+            actor(0x99);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1240,11 +1253,9 @@ mod tests {
             .unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
 
         let mut req = AiInferenceRequest {
             request_id: AiRequestId::default(),
@@ -1261,8 +1272,8 @@ mod tests {
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
 
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v1,
@@ -1275,8 +1286,8 @@ mod tests {
                 15,
             )
             .unwrap();
-        let outcome = registry
-            .submit_result(
+        let outcome = submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v2,
@@ -1302,8 +1313,7 @@ mod tests {
     fn test_p5_callback_none_when_no_callback() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1327,11 +1337,9 @@ mod tests {
             .unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
 
         let mut req = AiInferenceRequest {
             request_id: AiRequestId::default(),
@@ -1348,8 +1356,8 @@ mod tests {
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
 
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v1,
@@ -1362,8 +1370,8 @@ mod tests {
                 15,
             )
             .unwrap();
-        let outcome = registry
-            .submit_result(
+        let outcome = submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v2,
@@ -1387,8 +1395,7 @@ mod tests {
     fn test_p5_update_model_spec_by_owner() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1433,11 +1440,9 @@ mod tests {
     fn test_p5_update_model_spec_non_owner_rejected() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let other =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000002")
-                .unwrap();
+            actor(0x02);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1469,11 +1474,9 @@ mod tests {
     fn test_p5_transfer_model_ownership() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let new_owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000099")
-                .unwrap();
+            actor(0x99);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1513,8 +1516,7 @@ mod tests {
     fn test_p5_prune_expired_requests() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1567,8 +1569,7 @@ mod tests {
     fn test_p5_max_fee_zero_rejected() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1616,8 +1617,7 @@ mod tests {
         // Max_fee=100, 3 verifiers → 33+33+34 (not 33+33+33=99)
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1641,14 +1641,11 @@ mod tests {
             .unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         let v3 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000013")
-                .unwrap();
+            actor(0x13);
 
         let mut req = AiInferenceRequest {
             request_id: AiRequestId::default(),
@@ -1665,8 +1662,8 @@ mod tests {
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
 
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v1,
@@ -1679,8 +1676,8 @@ mod tests {
                 15,
             )
             .unwrap();
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v2,
@@ -1693,8 +1690,8 @@ mod tests {
                 16,
             )
             .unwrap();
-        let outcome = registry
-            .submit_result(
+        let outcome = submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v3,
@@ -1717,8 +1714,7 @@ mod tests {
     fn test_p5_register_model_duplicate_rejected() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1769,8 +1765,7 @@ mod tests {
         // Agreement_threshold > min_verifier_count must be rejected
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1803,8 +1798,7 @@ mod tests {
     fn test_p5_transfer_to_self_rejected() {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1841,8 +1835,7 @@ mod tests {
     ) -> (AiRegistry, AiModelId, Address) {
         let mut registry = AiRegistry::new();
         let owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap();
+            actor(0x01);
         let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
         registry
             .register_model(AiModelSpec {
@@ -1927,7 +1920,7 @@ mod tests {
         result_nonce: u64,
         current_block: u64,
     ) -> Result<Option<AiInferenceOutcome>, String> {
-        registry.submit_result(
+        submit_signed(&mut registry,
             AiInferenceResult {
                 request_id,
                 verifier,
@@ -2013,8 +2006,7 @@ mod tests {
         let req_id = registry.submit_request(req, 10).unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         // Result at exactly deadline_block (110) should be accepted
         // (result_deadline=210 > 110, so second check passes too)
         let result = submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 110);
@@ -2037,8 +2029,7 @@ mod tests {
             100,
         );
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let result = submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 111);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("deadline"));
@@ -2077,8 +2068,7 @@ mod tests {
         let req_id = registry.submit_request(req, 10).unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         // Result at exactly result_deadline (60) → accepted
         let result = submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 60);
         assert!(
@@ -2109,8 +2099,7 @@ mod tests {
         let req_id = registry.submit_request(req, 10).unwrap();
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let result = submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 61);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("deadline"));
@@ -2126,11 +2115,9 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v_a =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000021")
-                .unwrap();
+            actor(0x21);
         let v_b =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
 
         // Verifier A submits first commitment
         submit_ai_result(&mut registry, req_id, v_a, [1u8; 32], 1, 15).unwrap();
@@ -2160,8 +2147,7 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v_a =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000021")
-                .unwrap();
+            actor(0x21);
 
         // First submission
         submit_ai_result(&mut registry, req_id, v_a, [1u8; 32], 1, 15).unwrap();
@@ -2191,8 +2177,7 @@ mod tests {
 
         // Now try to submit a result - deadline has passed
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let result = submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 200);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("deadline"));
@@ -2219,11 +2204,9 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         submit_ai_result(&mut registry, req_id, v2, [9u8; 32], 2, 16).unwrap();
 
@@ -2242,14 +2225,11 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         let v3 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000013")
-                .unwrap();
+            actor(0x13);
 
         // 2 verifiers agree → not enough (need 3)
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
@@ -2273,8 +2253,7 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let outcome = submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         assert!(
             outcome.is_some(),
@@ -2290,11 +2269,9 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
 
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let outcome = submit_ai_result(&mut registry, req_id, v2, [9u8; 32], 2, 16).unwrap();
@@ -2312,14 +2289,11 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         let v3 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000013")
-                .unwrap();
+            actor(0x13);
 
         // 2 matching → finalize
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
@@ -2348,15 +2322,13 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
 
         // V1: commitment=[9u8;32], ref="ipfs://abc"
-        registry
-            .submit_result(
+        submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v1,
@@ -2371,8 +2343,8 @@ mod tests {
             .unwrap();
 
         // V2: same commitment, different ref → still counts as agreeing
-        let outcome = registry
-            .submit_result(
+        let outcome = submit_signed(
+            &mut registry,
                 AiInferenceResult {
                     request_id: req_id,
                     verifier: v2,
@@ -2399,8 +2371,7 @@ mod tests {
         let (mut registry, _, _) = setup_ai_registry(2, 2);
         let fake_req_id = AiRequestId::new([99u8; 32]);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let result = submit_ai_result(&mut registry, fake_req_id, v1, [9u8; 32], 1, 15);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found"));
@@ -2414,8 +2385,7 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
 
         let err = submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 2, 16).unwrap_err();
@@ -2436,11 +2406,9 @@ mod tests {
 
         // Results for the existing request should still be accepted
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let outcome = submit_ai_result(&mut registry, req_id, v2, [9u8; 32], 2, 16).unwrap();
         assert!(
@@ -2479,8 +2447,7 @@ mod tests {
         // Deactivate, reactivate, update spec, or transfer again.
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let new_owner =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000099")
-                .unwrap();
+            actor(0x99);
 
         registry
             .transfer_model_ownership(&model_id, &owner, new_owner)
@@ -2551,11 +2518,9 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _outcome = submit_ai_result(&mut registry, req_id, v2, [9u8; 32], 2, 16)
             .unwrap()
@@ -2588,8 +2553,7 @@ mod tests {
 
         // Submit result → root changes
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let root_after_result = registry.state_root();
         assert_ne!(root_after_request, root_after_result);
@@ -2614,8 +2578,7 @@ mod tests {
 
         // Only 1 verifier submits (need 3 for threshold)
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
 
         // No finalization occurred
@@ -2635,14 +2598,11 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         let v3 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000013")
-                .unwrap();
+            actor(0x13);
 
         // Three different commitments → no pair reaches threshold=2
         submit_ai_result(&mut registry, req_id, v1, [1u8; 32], 1, 15).unwrap();
@@ -2690,9 +2650,8 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
-        let result = registry.submit_result(
+            actor(0x11);
+        let result = submit_signed(&mut registry,
             AiInferenceResult {
                 request_id: req_id,
                 verifier: v1,
@@ -2718,8 +2677,7 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         // First result from v1
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
@@ -2737,8 +2695,7 @@ mod tests {
 
         // Verify verifier that didn't equivocate returns false
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         assert!(
             !registry.has_equivocated(&req_id, &v2),
             "Non-equivocating verifier should not be recorded"
@@ -2751,8 +2708,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         // Request 1: v1 equivocates
         let req1 = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
@@ -2773,8 +2729,7 @@ mod tests {
 
         // V2 has 0
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         assert_eq!(
             registry.equivocation_count_for_verifier(&v2),
             0,
@@ -2793,8 +2748,7 @@ mod tests {
         // Add an equivocation event → root changes
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
         let root_after_equiv = registry.state_root();
@@ -2891,8 +2845,7 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let other =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000099")
-                .unwrap();
+            actor(0x99);
         let result = registry.cancel_request(&req_id, &other, 15);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Only the requester"));
@@ -2905,11 +2858,9 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000012")
-                .unwrap();
+            actor(0x12);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         submit_ai_result(&mut registry, req_id, v2, [9u8; 32], 2, 16).unwrap();
 
@@ -2959,8 +2910,7 @@ mod tests {
 
         // Try to submit a result → rejected
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let result = submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 20);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cancelled"));
@@ -2974,8 +2924,7 @@ mod tests {
 
         let result = registry.cancel_request(
             &fake_id,
-            &Address::from_hex("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap(),
+            &actor(0x01),
             10,
         );
         assert!(result.is_err());
@@ -3002,8 +2951,7 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
 
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let root_before = registry.state_root();
 
@@ -3043,8 +2991,7 @@ mod tests {
         // Add just an equivocation event
         let fake_req = AiRequestId::new([1u8; 32]);
         let fake_addr =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         registry
             .equivocation_events
             .insert((fake_req, fake_addr.0), 100);
@@ -3084,8 +3031,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
         assert!(registry.has_equivocated(&req_id, &v1));
@@ -3099,8 +3045,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
         registry.slash_equivocator(&req_id, &v1, 20).unwrap();
@@ -3112,8 +3057,7 @@ mod tests {
         let (mut registry, _, _) = setup_ai_registry(2, 2);
         let fake_req = AiRequestId::new([0xAA; 32]);
         let fake_v =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         assert!(registry.slash_equivocator(&fake_req, &fake_v, 20).is_err());
     }
 
@@ -3122,8 +3066,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
         let root_before = registry.state_root();
@@ -3162,8 +3105,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
         // Slash at block 50 - equivocation detected at block 16, well within window
@@ -3176,8 +3118,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
         // Detected at block 16, window = 10080, so after 10096 should fail
@@ -3192,8 +3133,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
         assert!(registry.is_disputable(&req_id, &v1, 50));
@@ -3206,8 +3146,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
         assert!(registry.has_equivocated(&req_id, &v1));
@@ -3221,8 +3160,7 @@ mod tests {
         // Lock verifier stake
         let (mut registry, _, _) = setup_ai_registry(2, 2);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let stake = registry.lock_verifier_stake(&v1, 5000).unwrap();
         assert_eq!(stake, 5000);
         assert!(registry.is_staked_verifier(&v1));
@@ -3236,8 +3174,7 @@ mod tests {
     fn test_verifier_stake_zero_rejected() {
         let (mut registry, _, _) = setup_ai_registry(2, 2);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         assert!(registry.lock_verifier_stake(&v1, 0).is_err());
     }
 
@@ -3246,8 +3183,7 @@ mod tests {
         // Withdraw verifier stake when no pending disputes
         let (mut registry, _, _) = setup_ai_registry(2, 2);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         registry.lock_verifier_stake(&v1, 5000).unwrap();
         let withdrawn = registry.withdraw_verifier_stake(&v1, 3000, 100).unwrap();
         assert_eq!(withdrawn, 3000);
@@ -3260,8 +3196,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         registry.lock_verifier_stake(&v1, 5000).unwrap();
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
@@ -3277,8 +3212,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         registry.lock_verifier_stake(&v1, 5000).unwrap();
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
@@ -3294,8 +3228,7 @@ mod tests {
         let (mut registry, _, _) = setup_ai_registry(2, 2);
         let root_before = registry.state_root();
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         registry.lock_verifier_stake(&v1, 5000).unwrap();
         assert_ne!(root_before, registry.state_root());
     }
@@ -3306,8 +3239,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         registry.lock_verifier_stake(&v1, 5000).unwrap();
 
         // Before equivocation: no dispute
@@ -3337,8 +3269,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
 
@@ -3354,8 +3285,7 @@ mod tests {
         // Get_verifier_stake_info returns stake + equivocation count
         let (mut registry, _, _) = setup_ai_registry(2, 2);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         // Not staked yet
         let info = registry.get_verifier_stake_info(&v1);
@@ -3375,8 +3305,7 @@ mod tests {
         // Callback event is queued when outcome is finalized
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let cb_addr =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000CB")
-                .unwrap();
+            actor(0xCB);
         let req_id = submit_request_with_callback(
             &mut registry,
             model_id,
@@ -3387,11 +3316,9 @@ mod tests {
             Some(cb_addr),
         );
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
 
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let outcome = submit_ai_result(&mut registry, req_id, v2, [9u8; 32], 2, 20).unwrap();
@@ -3424,14 +3351,11 @@ mod tests {
 
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let cb_addr =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000CB")
-                .unwrap();
+            actor(0xCB);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
 
         // Finalize more inferences than the bound, all pointing at one
         // callback address that never consumes.
@@ -3486,11 +3410,9 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
 
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         submit_ai_result(&mut registry, req_id, v2, [9u8; 32], 2, 20).unwrap();
@@ -3504,8 +3426,7 @@ mod tests {
         // Consume (drain) callback events after delivery
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let cb_addr =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000CB")
-                .unwrap();
+            actor(0xCB);
         let req_id = submit_request_with_callback(
             &mut registry,
             model_id,
@@ -3516,11 +3437,9 @@ mod tests {
             Some(cb_addr),
         );
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
 
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         submit_ai_result(&mut registry, req_id, v2, [9u8; 32], 2, 20).unwrap();
@@ -3539,8 +3458,7 @@ mod tests {
         // Callback queue affects state root
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let cb_addr =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000CB")
-                .unwrap();
+            actor(0xCB);
         let req_id = submit_request_with_callback(
             &mut registry,
             model_id,
@@ -3551,11 +3469,9 @@ mod tests {
             Some(cb_addr),
         );
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
 
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let root_before = registry.state_root();
@@ -3569,8 +3485,7 @@ mod tests {
         // Multiple outcomes can queue events for the same callback
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let cb_addr =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000CB")
-                .unwrap();
+            actor(0xCB);
         // Two requests with same callback but different submission blocks
         // (so they get different request_ids)
         let req1 = submit_request_with_callback(
@@ -3592,11 +3507,9 @@ mod tests {
             Some(cb_addr),
         );
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
 
         submit_ai_result(&mut registry, req1, v1, [9u8; 32], 1, 15).unwrap();
         submit_ai_result(&mut registry, req1, v2, [9u8; 32], 2, 20).unwrap();
@@ -3613,8 +3526,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
 
         let proof = AiExecutionProof {
@@ -3646,8 +3558,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
 
         let proof = AiExecutionProof {
@@ -3673,8 +3584,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         // No result submitted yet
 
         let proof = AiExecutionProof {
@@ -3699,8 +3609,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         assert!(registry.get_verifier_qos(&v1).is_none());
 
@@ -3717,11 +3626,9 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
 
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         submit_ai_result(&mut registry, req_id, v2, [9u8; 32], 2, 20).unwrap();
@@ -3739,8 +3646,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(3, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
         let _ = submit_ai_result(&mut registry, req_id, v1, [88u8; 32], 2, 16);
 
@@ -3752,8 +3658,7 @@ mod tests {
     fn test_verifier_qos_reliability_score() {
         // Reliability score calculation
         let mut qos = AiVerifierQos::new(
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap(),
+            actor(0x11),
         );
         qos.total_results_submitted = 10;
         qos.successful_finalizations = 8;
@@ -3773,8 +3678,7 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
 
         let root_before = registry.state_root();
@@ -3806,8 +3710,7 @@ mod tests {
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let _ = root_before; // just trigger QoS via result submission
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         submit_ai_result(&mut registry, req_id, v1, [9u8; 32], 1, 15).unwrap();
 
         // QoS recorded → state root should change
@@ -3821,11 +3724,9 @@ mod tests {
         // Non-escrowed agent payment
         let (mut registry, _model_id, _owner) = setup_ai_registry(2, 2);
         let agent_a =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000AA")
-                .unwrap();
+            actor(0xAA);
         let agent_b =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000BB")
-                .unwrap();
+            actor(0xBB);
         let payment = AiAgentPayment {
             payment_id: [1u8; 32],
             from_agent: agent_a,
@@ -3848,11 +3749,9 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let agent_a =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000AA")
-                .unwrap();
+            actor(0xAA);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let payment = AiAgentPayment {
             payment_id: [2u8; 32],
             from_agent: agent_a,
@@ -3873,8 +3772,7 @@ mod tests {
         // From_agent == to_agent is rejected
         let (mut registry, _model_id, _owner) = setup_ai_registry(2, 2);
         let agent_a =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000AA")
-                .unwrap();
+            actor(0xAA);
         let payment = AiAgentPayment {
             payment_id: [3u8; 32],
             from_agent: agent_a,
@@ -3893,11 +3791,9 @@ mod tests {
     fn test_agent_payment_zero_amount_rejected() {
         let (mut registry, _model_id, _owner) = setup_ai_registry(2, 2);
         let agent_a =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000AA")
-                .unwrap();
+            actor(0xAA);
         let agent_b =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000BB")
-                .unwrap();
+            actor(0xBB);
         let payment = AiAgentPayment {
             payment_id: [4u8; 32],
             from_agent: agent_a,
@@ -3916,11 +3812,9 @@ mod tests {
     fn test_agent_payment_expired_rejected() {
         let (mut registry, _model_id, _owner) = setup_ai_registry(2, 2);
         let agent_a =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000AA")
-                .unwrap();
+            actor(0xAA);
         let agent_b =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000BB")
-                .unwrap();
+            actor(0xBB);
         let payment = AiAgentPayment {
             payment_id: [5u8; 32],
             from_agent: agent_a,
@@ -3944,14 +3838,11 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
         let agent_a =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000AA")
-                .unwrap();
+            actor(0xAA);
 
         // Submit escrowed payment
         let payment = AiAgentPayment {
@@ -3984,11 +3875,9 @@ mod tests {
         let (mut registry, model_id, owner) = setup_ai_registry(2, 2);
         let req_id = submit_ai_request(&mut registry, model_id, owner, 10, 110, 100);
         let agent_a =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000AA")
-                .unwrap();
+            actor(0xAA);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
 
         let payment = AiAgentPayment {
             payment_id: [7u8; 32],
@@ -4017,11 +3906,9 @@ mod tests {
         let root_before = registry.state_root();
 
         let agent_a =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000AA")
-                .unwrap();
+            actor(0xAA);
         let agent_b =
-            Address::from_hex("00000000000000000000000000000000000000000000000000000000000000BB")
-                .unwrap();
+            actor(0xBB);
         let payment = AiAgentPayment {
             payment_id: [8u8; 32],
             from_agent: agent_a,
@@ -4043,8 +3930,7 @@ mod tests {
         // Empty whitelist = permissionless mode
         let (mut registry, _model_id, _owner) = setup_ai_registry(2, 2);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         // Stake the verifier
         registry.lock_verifier_stake(&v1, 1_000).unwrap();
 
@@ -4058,11 +3944,9 @@ mod tests {
         // Non-empty whitelist = permissioned mode
         let (mut registry, _model_id, _owner) = setup_ai_registry(2, 2);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         let v2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000022")
-                .unwrap();
+            actor(0x22);
 
         // Stake both verifiers
         registry.lock_verifier_stake(&v1, 1_000).unwrap();
@@ -4082,8 +3966,7 @@ mod tests {
         // Whitelisted but unstaked = not authorized
         let (mut registry, _model_id, _owner) = setup_ai_registry(2, 2);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         // Whitelist but don't stake
         registry.whitelist_verifier(v1);
         assert!(!registry.is_verifier_authorized(&v1));
@@ -4093,8 +3976,7 @@ mod tests {
     fn test_whitelist_dewhitelist() {
         let (mut registry, _model_id, _owner) = setup_ai_registry(2, 2);
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         registry.lock_verifier_stake(&v1, 1_000).unwrap();
         registry.whitelist_verifier(v1);
         assert!(registry.is_verifier_authorized(&v1));
@@ -4111,8 +3993,7 @@ mod tests {
         let (mut registry, _model_id, _owner) = setup_ai_registry(2, 2);
         let root_before = registry.state_root();
         let v1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000011")
-                .unwrap();
+            actor(0x11);
         registry.whitelist_verifier(v1);
         assert_ne!(root_before, registry.state_root());
     }
@@ -4123,8 +4004,7 @@ mod tests {
     fn test_reputation_new_agent_starts_at_zero() {
         let mut registry = AiRegistry::new();
         let agent =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000090")
-                .unwrap();
+            actor(0x90);
         // No reputation yet
         assert!(registry.get_agent_reputation(&agent).is_none());
 
@@ -4143,8 +4023,7 @@ mod tests {
     fn test_reputation_payment_events() {
         let mut registry = AiRegistry::new();
         let agent =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000091")
-                .unwrap();
+            actor(0x91);
         registry.record_reputation_payment_completed(&agent, 100);
         registry.record_reputation_payment_completed(&agent, 110);
         registry.record_reputation_payment_defaulted(&agent, 120);
@@ -4162,8 +4041,7 @@ mod tests {
     fn test_reputation_inference_events() {
         let mut registry = AiRegistry::new();
         let verifier =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000092")
-                .unwrap();
+            actor(0x92);
         registry.record_reputation_result_submitted(&verifier, 100);
         registry.record_reputation_result_submitted(&verifier, 110);
         registry.record_reputation_result_finalized(&verifier, 110);
@@ -4183,11 +4061,9 @@ mod tests {
     fn test_reputation_agents_by_trust_score() {
         let mut registry = AiRegistry::new();
         let a1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000093")
-                .unwrap();
+            actor(0x93);
         let a2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000094")
-                .unwrap();
+            actor(0x94);
 
         // 3 completed, 0 defaulted → payment_reliability = 1.0
         registry.record_reputation_payment_completed(&a1, 100);
@@ -4214,8 +4090,7 @@ mod tests {
         let mut registry = AiRegistry::new();
         let root_before = registry.state_root();
         let agent =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000095")
-                .unwrap();
+            actor(0x95);
         registry.record_reputation_payment_completed(&agent, 100);
         assert_ne!(
             root_before,
@@ -4228,14 +4103,11 @@ mod tests {
     fn test_reputation_top_agents() {
         let mut registry = AiRegistry::new();
         let a1 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000096")
-                .unwrap();
+            actor(0x96);
         let a2 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000097")
-                .unwrap();
+            actor(0x97);
         let a3 =
-            Address::from_hex("0000000000000000000000000000000000000000000000000000000000000098")
-                .unwrap();
+            actor(0x98);
 
         registry.record_reputation_payment_completed(&a1, 100);
         registry.record_reputation_payment_completed(&a2, 100);
@@ -4246,5 +4118,159 @@ mod tests {
         assert_eq!(top2.len(), 2);
         // And a3 should be top (both 100% reliability)
         assert!(top2.iter().all(|(a, _)| *a == a1 || *a == a3));
+    }
+
+    // ---- Strix bulgusu (HIGH, CWE-863) regresyonları ----
+    //
+    // Bu dört test `submit_result`'ı doğrudan çağırır - kontrol edilen şey
+    // Zaten yetkilendirme kapısının kendisi olduğu için `submit_signed`
+    // Yardımcısı kullanılmaz.
+
+    /// Kayıtlı olmayan bir adres, geçerli imzasıyla bile sonuç gönderemez.
+    #[test]
+    fn an_unauthorized_verifier_cannot_submit_a_result() {
+        let (mut registry, req_id) = single_verifier_request();
+        let intruder = actor(0x55);
+
+        let mut result = AiInferenceResult {
+            request_id: req_id,
+            verifier: intruder,
+            output_commitment: [7u8; 32],
+            output_ref: BoundedBytes::try_new(b"out".to_vec()).unwrap(),
+            result_nonce: 1,
+            submitted_at_block: 15,
+            signature: Vec::new(),
+        };
+        result.sign(&key(0x55)).unwrap();
+
+        let err = registry
+            .submit_result(result, 15)
+            .expect_err("teminatsız adres reddedilmeli");
+        assert!(err.contains("is not authorized"), "alınan: {err}");
+    }
+
+    /// Teminat var ama asgarinin altında: `is_verifier_authorized` yalnızca
+    /// Kaydın varlığına bakar, miktara bakmaz - ikinci kapı bunun içindir.
+    #[test]
+    fn a_verifier_below_the_minimum_stake_is_refused() {
+        let (mut registry, req_id) = single_verifier_request();
+        let thin = actor(0x56);
+        registry
+            .lock_verifier_stake(&thin, crate::ai::registry::MIN_VERIFIER_STAKE - 1)
+            .unwrap();
+
+        let mut result = AiInferenceResult {
+            request_id: req_id,
+            verifier: thin,
+            output_commitment: [7u8; 32],
+            output_ref: BoundedBytes::try_new(b"out".to_vec()).unwrap(),
+            result_nonce: 1,
+            submitted_at_block: 15,
+            signature: Vec::new(),
+        };
+        result.sign(&key(0x56)).unwrap();
+
+        let err = registry
+            .submit_result(result, 15)
+            .expect_err("yetersiz teminat reddedilmeli");
+        assert!(err.contains("below the"), "alınan: {err}");
+    }
+
+    /// Yetkili doğrulayıcının adına başkası sonuç gönderemez.
+    #[test]
+    fn a_result_signed_by_the_wrong_key_is_refused() {
+        let (mut registry, req_id) = single_verifier_request();
+        let honest = actor(0x57);
+        registry
+            .lock_verifier_stake(&honest, crate::ai::registry::MIN_VERIFIER_STAKE)
+            .unwrap();
+
+        let mut result = AiInferenceResult {
+            request_id: req_id,
+            verifier: honest,
+            output_commitment: [7u8; 32],
+            output_ref: BoundedBytes::try_new(b"out".to_vec()).unwrap(),
+            result_nonce: 1,
+            submitted_at_block: 15,
+            signature: Vec::new(),
+        };
+        // Saldırgan kendi anahtarıyla imzalıyor, ama `verifier` dürüst adresi
+        // Gösteriyor.
+        result.signature = key(0x58).sign(&result.calculate_signing_hash()).to_vec();
+
+        let err = registry
+            .submit_result(result, 15)
+            .expect_err("yanlış anahtarın imzası reddedilmeli");
+        assert!(
+            err.contains("not valid for the named verifier"),
+            "alınan: {err}"
+        );
+    }
+
+    /// İmza zincire bağlı: `chain_id` ön-görüntüde olduğu için başka bir ağda
+    /// Atılmış imza burada doğrulanmaz.
+    #[test]
+    fn a_signature_from_another_chain_does_not_verify_here() {
+        let mut result = AiInferenceResult {
+            request_id: AiRequestId([4u8; 32]),
+            verifier: actor(0x59),
+            output_commitment: [7u8; 32],
+            output_ref: BoundedBytes::try_new(b"out".to_vec()).unwrap(),
+            result_nonce: 1,
+            submitted_at_block: 15,
+            signature: Vec::new(),
+        };
+        let foreign_chain = crate::core::transaction::DEFAULT_CHAIN_ID + 1;
+        result.sign_for_chain(&key(0x59), foreign_chain).unwrap();
+
+        result
+            .verify_signature_for_chain(foreign_chain)
+            .expect("kendi ağında geçerli olmalı");
+        assert!(
+            result.verify_signature().is_err(),
+            "başka ağın imzası burada geçmemeli"
+        );
+    }
+
+    /// Yukarıdaki testler için tek doğrulayıcılı, açık bir istek kurar.
+    fn single_verifier_request() -> (AiRegistry, AiRequestId) {
+        let mut registry = AiRegistry::new();
+        let owner = actor(0x01);
+        let model_id = AiModelId::of(&owner, &[1u8; 32], 1);
+        registry
+            .register_model(AiModelSpec {
+                model_id,
+                model_hash: [1u8; 32],
+                owner,
+                min_verifier_count: 1,
+                agreement_threshold: 1,
+                max_input_ref_bytes: 1024,
+                max_output_ref_bytes: 2048,
+                request_deadline_blocks: 100,
+                result_deadline_blocks: 50,
+                version: 1,
+                active: true,
+                require_execution_proof: false,
+                execution_program_hash: None,
+                execution_class: 0,
+                execution_dims: None,
+                execution_weights_digest: None,
+            })
+            .unwrap();
+
+        let mut req = AiInferenceRequest {
+            request_id: AiRequestId([0u8; 32]),
+            model_id,
+            requester: actor(0x02),
+            input_ref: BoundedBytes::try_new(b"in".to_vec()).unwrap(),
+            max_fee: 100,
+            callback: None,
+            submitted_at_block: 10,
+            deadline_block: 110,
+            effort: crate::lubot::effort::EffortTier::default(),
+        };
+        req.request_id = req.calculate_id();
+        let req_id = registry.submit_request(req, 10).unwrap();
+        (registry, req_id)
     }
 }
