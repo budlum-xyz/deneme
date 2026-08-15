@@ -82,6 +82,12 @@ pub struct RegistryParams {
     /// Fails verification. Set to 0 to disable. Same permissionless-but-costly
     /// Pattern as `slashing_report_fee`.
     pub proof_submission_fee: u64,
+    /// Fee required to register an AI model (Lubot), as an anti-sybil/DoS
+    /// measure on the model registry. Governance-tunable per network; set to
+    /// 0 to disable. Charged as an exact cost on top of the base transaction
+    /// fee (H1 exact-cost pattern): paying less is rejected, paying more is
+    /// not refunded - the difference is burned like any overpay.
+    pub ai_model_register_fee: u64,
     /// Reward paid to a *registered* prover (PROVER role) for a proof that
     /// Verifies and advances domain state. Unregistered submitters still have
     /// Their valid proofs accepted but earn no reward. Set to 0 to disable
@@ -307,6 +313,10 @@ impl Default for RegistryParams {
             // Valid proof so honest provers pay nothing net, but flooding invalid
             // Proofs is costly and sybil-resistant.
             proof_submission_fee: 10,
+            // 1% of min_stake = 10, mirroring slashing/proof fees: cheap for
+            // an honest registrant, costly for registry-flooding sybils.
+            // Governance-tunable per network; 0 disables.
+            ai_model_register_fee: 10,
             // Fixed-supply policy: proof rewards cannot mint. A future
             // Transaction-scoped fee pool may fund this, but until that pool is
             // Committed in state the only safe reward is zero.
@@ -374,7 +384,7 @@ mod tests {
         // would never fail, so it would not be a pin at all.
         assert_eq!(
             encoded.len(),
-            15 * 8 + 1,
+            16 * 8 + 1,
             "RegistryParams changed shape: old snapshots can no longer be \
              deserialized and the state root moves. See the type's docs."
         );
@@ -392,13 +402,13 @@ mod tests {
             bincode::serialize(&RegistryParams::default()).expect("RegistryParams is serializable");
         assert_ne!(
             encoded.len(),
-            16 * 8 + 1,
-            "a sixteenth u64 field would have to update the pin above, \
+            17 * 8 + 1,
+            "a seventeenth u64 field would have to update the pin above, \
              which is the signal that snapshot compatibility broke"
         );
         assert_ne!(
             encoded.len(),
-            14 * 8 + 1,
+            15 * 8 + 1,
             "removing a field is equally a state-format change"
         );
     }
