@@ -2938,11 +2938,17 @@ impl BudlumApiServer for RpcServer {
         // Strix HIGH (#364, deneme): Pollen korumali icerik, AccessGrant
         // olmadan bu RPC uzerinden cekilememeli. storage_get_manifest ve
         // storage_get_deals_* handler'lariyla ayni desen: koruyucu asset
-        // varsa yalnizca metadata (burada hicbir sey) donulur.
+        // varsa erisim reddedilir.
+        //
+        // Strix HIGH (#364, 2. denetim): kontrol yalniz storage_root'a
+        // bakiyordu; content_id-set/storage_root-unset kayitlar guard'i
+        // atliyordu. Manifest kimligi content_id oncelikli birlestirilir.
         let resolved = self.chain.bns_resolve_full(name.clone()).await;
-        let storage_root = resolved.as_ref().and_then(|r| r.storage_root);
-        if let Some(root) = storage_root {
-            let cid = crate::storage::ContentId(root);
+        let manifest_id = resolved.as_ref().and_then(|r| {
+            r.content_id
+                .or(r.storage_root.map(crate::storage::ContentId))
+        });
+        if let Some(cid) = manifest_id {
             if self.chain.pollen_asset_for_content(cid).await.is_some() {
                 return Err(ErrorObjectOwned::owned(
                     -32603,
