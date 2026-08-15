@@ -524,28 +524,17 @@ impl VerifierRegistry {
             .collect()
     }
 
+    // Strix MEDIUM (#366, 2. denetim): rol-spesifik is_active_* helper'lari
+    // Unbonding'i active sayiyordu; begin_unbonding kaydi Active'den cikarir
+    // cikarmaz bu helper'lar hala yetki veriyordu. Yetki yalniz
+    // MemberStatus::Active icindir; cikis sirasinda stake'in slash edilebilir
+    // kalip kalmadigi ayri bir sorudur ve ayri helper'in konusudur.
     pub fn is_active_relayer(&self, account: &Address) -> bool {
-        match self.get(account, crate::role::roles::RELAYER) {
-            Some(reg) => {
-                matches!(
-                    reg.status,
-                    MemberStatus::Active | MemberStatus::Unbonding { .. }
-                ) && reg.stake > 0
-            }
-            None => false,
-        }
+        self.is_active(account, crate::role::roles::RELAYER)
     }
 
     pub fn is_active_attester(&self, account: &Address) -> bool {
-        match self.get(account, crate::role::roles::ATTESTER) {
-            Some(reg) => {
-                matches!(
-                    reg.status,
-                    MemberStatus::Active | MemberStatus::Unbonding { .. }
-                ) && reg.stake > 0
-            }
-            None => false,
-        }
+        self.is_active(account, crate::role::roles::ATTESTER)
     }
 
     pub fn is_active_master_verifier(&self, account: &Address) -> bool {
@@ -553,27 +542,11 @@ impl VerifierRegistry {
     }
 
     pub fn is_active_lubot_operator(&self, account: &Address) -> bool {
-        match self.get(account, crate::role::roles::LUBOT_OPERATOR) {
-            Some(reg) => {
-                matches!(
-                    reg.status,
-                    MemberStatus::Active | MemberStatus::Unbonding { .. }
-                ) && reg.stake > 0
-            }
-            None => false,
-        }
+        self.is_active(account, crate::role::roles::LUBOT_OPERATOR)
     }
 
     pub fn is_active_content_validator(&self, account: &Address) -> bool {
-        match self.get(account, crate::role::roles::CONTENT_VALIDATOR) {
-            Some(reg) => {
-                matches!(
-                    reg.status,
-                    MemberStatus::Active | MemberStatus::Unbonding { .. }
-                ) && reg.stake > 0
-            }
-            None => false,
-        }
+        self.is_active(account, crate::role::roles::CONTENT_VALIDATOR)
     }
 
     pub fn total_stake(&self, role: RoleId) -> u64 {
