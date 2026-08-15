@@ -847,8 +847,7 @@ mod tests {
         );
         // Owner imzasi: asset.owner = addr(1) test keypair'i ile.
         let signer = test_keypair(1);
-        grant.owner_signature =
-            super::super::Signature64::from(signer.sign(&grant.signing_hash()));
+        grant.owner_signature = super::super::Signature64::from(signer.sign(&grant.signing_hash()));
         grant
     }
 
@@ -869,7 +868,11 @@ mod tests {
         let auth = registry
             .get_sale_authorization(&authorization_id)
             .expect("authorization must exist for signed purchase");
-        let preimage = MarketplaceRegistry::purchase_signing_hash(
+        // Preimage hesabi hata donebilir (expiry asimi vb.); o durumda
+        // islem imza dogrulamasina ulasmadan reddedilir (issue_grant once
+        // preimage'i hesaplar). Sentinel olmayan dummy imza dondurmek
+        // yeterli - asil hata testin bekledigi hatadir.
+        let Ok(preimage) = MarketplaceRegistry::purchase_signing_hash(
             auth,
             buyer,
             grantee,
@@ -877,8 +880,9 @@ mod tests {
             grant_duration_blocks,
             max_reads,
             payment_commitment,
-        )
-        .expect("preimage must be computable");
+        ) else {
+            return Signature64::from([1u8; 64]);
+        };
         Signature64::from(test_keypair(buyer_byte).sign(&preimage))
     }
 
