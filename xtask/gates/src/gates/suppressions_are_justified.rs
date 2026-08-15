@@ -207,6 +207,18 @@ const BUDGETS: &[Budget] = &[
         reason: "wraps generated code that nobody edits by hand",
     },
     Budget {
+        file: "src/network/proto_conversions.rs",
+        lint: "clippy::pedantic",
+        count: 1,
+        reason: "prost-build output is machine-written; the module is a single include! and pedantic lints on generated getters (must_use_candidate, missing_const_for_fn) cannot be fixed by hand without editing OUT_DIR code",
+    },
+    Budget {
+        file: "src/network/proto_conversions.rs",
+        lint: "clippy::nursery",
+        count: 1,
+        reason: "prost-build output is machine-written; nursery lints on generated doc comments (doc_markdown) are not actionable in OUT_DIR code",
+    },
+    Budget {
         file: "src/pollen/data_rights.rs",
         lint: "clippy::too_many_arguments",
         count: 3,
@@ -215,8 +227,8 @@ const BUDGETS: &[Budget] = &[
     Budget {
         file: "src/pollen/offers.rs",
         lint: "clippy::too_many_arguments",
-        count: 3,
-        reason: "a consensus or storage entry point whose arguments are all required and none of which groups into a meaningful struct; bundling them would hide which fields a caller must supply",
+        count: 4,
+        reason: "a consensus or storage entry point whose arguments are all required and none of which groups into a meaningful struct; bundling them would hide which fields a caller must supply; the fourth is the signed_purchase test helper mirroring the purchase preimage parameters",
     },
     Budget {
         file: "src/registry/evidence.rs",
@@ -259,6 +271,12 @@ const BUDGETS: &[Budget] = &[
         lint: "clippy::needless_range_loop",
         count: 1,
         reason: "test code indexing two slices in step, where the index is the point",
+    },
+    Budget {
+        file: "src/lubot/inference.rs",
+        lint: "clippy::too_many_arguments",
+        count: 1,
+        reason: "build_lubot_request is a closed-circuit inference entry point whose eight parameters are all required request fields (requester, model, input, fee, timing x2, grant, perception) and none of which groups into a meaningful struct without hiding which fields a caller must supply",
     },
 ];
 
