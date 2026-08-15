@@ -2738,11 +2738,17 @@ impl BudlumApiServer for RpcServer {
     ) -> Result<serde_json::Value, ErrorObjectOwned> {
         let authorization_id = parse_pollen_asset_id(&authorization_id)?;
         let payment_commitment = parse_hex32_field(&payment_commitment, "paymentCommitment")?;
-        // Strix HIGH (#358, 2. denetim): buyer imzasi zorunlu — satin alma
+        // Strix HIGH (#358, 2. denetim): buyer imzasi zorunlu - satin alma
         // parametrelerinin tamamina baglanmis ed25519 imzasi.
-        let clean_sig = buyer_signature.strip_prefix("0x").unwrap_or(&buyer_signature);
+        let clean_sig = buyer_signature
+            .strip_prefix("0x")
+            .unwrap_or(&buyer_signature);
         let sig_bytes = hex::decode(clean_sig).map_err(|e| {
-            ErrorObjectOwned::owned(-32602, format!("Invalid buyerSignature hex: {e}"), None::<()>)
+            ErrorObjectOwned::owned(
+                -32602,
+                format!("Invalid buyerSignature hex: {e}"),
+                None::<()>,
+            )
         })?;
         if sig_bytes.len() != 64 {
             return Err(ErrorObjectOwned::owned(

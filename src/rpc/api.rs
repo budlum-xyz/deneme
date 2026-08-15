@@ -597,7 +597,7 @@ pub trait BudlumApi {
     ///
     /// `buyer_signature`: buyer'in satin alma parametrelerinin tamamina
     /// (authorization, fiyat, sure, max_reads, payment_commitment, expiry)
-    /// baglanmis ed25519 imzasi — Strix #358: imzasiz purchase kabul
+    /// baglanmis ed25519 imzasi - Strix #358: imzasiz purchase kabul
     /// edilmez.
     #[method(name = "bud_pollenPreparePurchase")]
     async fn pollen_prepare_purchase(
