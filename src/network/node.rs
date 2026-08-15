@@ -1911,7 +1911,7 @@ impl Node {
                                            }
 
                                            NetworkMessage::GetBlocksRange { from, to } => {
-                                               // Strix HIGH (#362, deneme): gossip yaniti publish etme —
+                                               // Strix HIGH (#362, deneme): gossip yaniti publish etme -
                                                // senkron peer-bound request_response uzerinden isler.
                                                if from > to {
                                                    warn!("Rejected inverted block range from {peer_id}: {from}..{to}");
@@ -2026,7 +2026,7 @@ impl Node {
                                            }
 
                                            NetworkMessage::GetBlocksByHeight { from_height, to_height } => {
-                                               // Strix HIGH (#362, deneme): gossip yaniti publish etme —
+                                               // Strix HIGH (#362, deneme): gossip yaniti publish etme -
                                                // senkron peer-bound request_response uzerinden isler.
                                                warn!("Ignoring gossip GetBlocksByHeight [{from_height}, {to_height}] from {peer_id}: sync is point-to-point (request_response)");
                                                continue;
@@ -2333,7 +2333,7 @@ impl Node {
                                                        warn!("Failed to apply FinalityCert from {peer_id}: {e}");
                                                        if e.contains("Missing verified QC blob") {
                                                            // Strix HIGH (#362, 2. denetim): QC blob eksigi
-                                                           // gossip'e GetQcBlob yayinlamaz — bu, FinalityCert
+                                                           // gossip'e GetQcBlob yayinlamaz - bu, FinalityCert
                                                            // gondererek mesh-geneli QcBlobResponse fan-out'u
                                                            // tetiklemeye izin verirdi (reflected DoS).
                                                            warn!(
