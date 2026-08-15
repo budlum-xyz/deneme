@@ -82,6 +82,7 @@ pub const GOVERNANCE_PARAMETER_WHITELIST: &[&str] = &[
     "transfer_fee_ppm",
     "swap_fee_ppm",
     "bridge_fee_ppm",
+    "ai_model_register_fee",
 ];
 
 pub fn is_governance_parameter_whitelisted(key: &str) -> bool {

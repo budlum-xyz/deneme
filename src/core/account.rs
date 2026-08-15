@@ -1708,6 +1708,11 @@ impl AccountState {
                     .parse::<u64>()
                     .map_err(|e| format!("invalid bridge_fee_ppm: {e}"))?;
             }
+            "ai_model_register_fee" => {
+                params.ai_model_register_fee = value
+                    .parse::<u64>()
+                    .map_err(|e| format!("invalid ai_model_register_fee: {e}"))?;
+            }
             other => return Err(format!("unknown registry parameter: {other}")),
         }
         params.validate()?;

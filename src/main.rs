@@ -1164,8 +1164,19 @@ async fn main() {
             }
         });
 
-        // Operator RPC listener (localhost-only, no auth by default)
+        // Operator RPC listener (localhost-only, no auth by default).
+        // Strix HIGH (#351, yeni tur): operator yüzeyi kimlik doğrulamasız;
+        // loopback dışı bind uzak saldırgana operatör işlemlerini açar.
+        // Fail-closed: loopback olmayan adres yapılandırılırsa düğüm çıkmaz.
         if let Some(operator_addr) = config.rpc_operator_listener.as_ref() {
+            let host = operator_addr.split(':').next().unwrap_or("");
+            let is_loopback = matches!(host, "127.0.0.1" | "localhost" | "::1");
+            if !is_loopback {
+                eprintln!(
+                    "Operator RPC listener must bind loopback only (no auth): {operator_addr}"
+                );
+                std::process::exit(1);
+            }
             let op_security = RpcSecurityConfig::operator_default();
             let op_server = RpcServer::with_security_and_mode(
                 chain.clone(),
@@ -1191,7 +1202,9 @@ async fn main() {
     let metrics_bind = config
         .metrics_listener
         .clone()
-        .unwrap_or_else(|| format!("0.0.0.0:{}", config.metrics_port));
+        // Strix LOW (#351): metrikler auth'suz; varsayılan bind loopback'e
+        // çekildi - 0.0.0.0 yalnızca bilinçli yapılandırmayla mümkündür.
+        .unwrap_or_else(|| format!("127.0.0.1:{}", config.metrics_port));
     tokio::spawn(async move {
         use http_body_util::Full;
         use hyper::service::service_fn;

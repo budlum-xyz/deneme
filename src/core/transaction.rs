@@ -1122,6 +1122,11 @@ fn encode_model_spec(spec: &crate::ai::types::AiModelSpec, out: &mut Vec<u8>) {
         }
         None => put_u8(out, 0),
     }
+    // Modalities are part of the model's contract (the admission gate keys
+    // off this declaration); leaving them out of the preimage let a relaying
+    // node rewrite a signed registration to advertise a modality the owner
+    // never declared, and the signature still verified.
+    put_u32(out, spec.modalities.bits());
 }
 fn encode_transaction_type_payload(tx_type: &TransactionType, out: &mut Vec<u8>) {
     match tx_type {
@@ -1219,6 +1224,19 @@ fn encode_transaction_type_payload(tx_type: &TransactionType, out: &mut Vec<u8>)
             // is what a node checks first, and a preimage that omits a field
             // the wire carries is a field a relaying node may edit.
             put_u32(out, u32::from(req.effort.tenths()));
+            // Perception imza ön-imgesinde (wire-fields-are-signed kapısı):
+            // algı bildirimi istek anlamının parçasıdır; bir röle düğümü
+            // bunu değiştirebilse imza yine geçerdi.
+            match &req.perception {
+                Some(p) => {
+                    put_u8(out, 1);
+                    put_fixed(out, &p.asset_id.0);
+                    put_fixed(out, &p.content_id.0);
+                    put_u8(out, p.kind.perception_tag());
+                    put_u32(out, p.declared_units);
+                }
+                None => put_u8(out, 0),
+            }
         }
         TransactionType::AiInferenceResult(res) => {
             put_fixed(out, &res.request_id.0);
@@ -1422,6 +1440,7 @@ mod v29_signing_tests {
             execution_class: 1,
             execution_weights_digest: Some([1u8; 32]),
             execution_dims: Some(vec![4, 1]),
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
         let mut tx = signed_variant(TransactionType::AiModelRegister(spec.clone()));
         let TransactionType::AiModelRegister(registered) = &mut tx.tx_type else {
@@ -1469,6 +1488,7 @@ mod v29_signing_tests {
             submitted_at_block: 1,
             deadline_block: 100,
             effort: crate::lubot::effort::EffortTier::DEEPEST,
+            perception: None,
         };
         req.request_id = req.calculate_id();
         assert!(req.verify_id(), "the fixture must start honest");
@@ -1576,6 +1596,7 @@ mod v29_signing_tests {
             execution_class: 0,
             execution_weights_digest: None,
             execution_dims: None,
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
         let mut absent = Vec::new();
         encode_model_spec(&base, &mut absent);
