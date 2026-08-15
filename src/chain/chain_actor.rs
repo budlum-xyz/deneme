@@ -124,6 +124,13 @@ pub enum ChainCommand {
         u64,
         oneshot::Sender<Result<(), String>>,
     ),
+    /// F-17: operator self-declares `AlwaysOn` vs `Mobile`. The actor
+    /// writes only the local signer address; a caller cannot name a
+    /// third party.
+    SetStorageOperatorClass {
+        class: crate::domain::storage_deal::OperatorClass,
+        response: oneshot::Sender<Result<(), String>>,
+    },
     /// Begin unbonding an independently-debited role bond (`RELAYER`,
     /// `PROVER`, `STORAGE_OPERATOR`). Returns the release epoch.
     BeginRoleBondUnbonding(
@@ -1274,6 +1281,33 @@ impl ChainHandle {
             .unwrap_or_else(|_| Err("Actor dropped".to_string()))
     }
 
+    /// F-17: the local signer declares `AlwaysOn` vs `Mobile`.
+    ///
+    /// The actor ignores any third-party address. Class is
+    /// self-reported; `open_deal` holds the signer to whatever it
+    /// claimed. No consensus `TransactionType` is added here (that
+    /// is a wire-surface change).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the actor channel is closed or the node
+    /// cannot persist the class change.
+    pub async fn set_storage_operator_class(
+        &self,
+        class: crate::domain::storage_deal::OperatorClass,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .tx
+            .send(ChainCommand::SetStorageOperatorClass {
+                class,
+                response: tx,
+            })
+            .await;
+        rx.await
+            .unwrap_or_else(|_| Err("Actor dropped".to_string()))
+    }
+
     /// Begin unbonding a `RELAYER` / `PROVER` / `STORAGE_OPERATOR` bond.
     ///
     /// These three bonds debit the account balance at bond time and had no exit
@@ -2243,6 +2277,111 @@ impl ChainActor {
                 "B.U.D. object {} is in the repair band at epoch {current_epoch}: {live} shards live, k={k}, margin={margin}",
                 hex::encode(manifest_id.0)
             );
+            // F-16: a repair band that only logs is not a repair. A live
+            // deal must not get an expiry ticket: accepting that ticket
+            // would open a second Active deal on the same
+            // (manifest, shard, replica_index) and pay two operators for
+            // one slot. Tickets are only for shards that currently have
+            // zero active replicas, keyed off a historic deal if one
+            // exists. A shard the registry never placed cannot be
+            // ticketed with the current type; that gap is logged.
+            let Some(manifest) = self
+                .blockchain
+                .state
+                .storage_registry
+                .get_manifest(manifest_id)
+                .cloned()
+            else {
+                continue;
+            };
+            for shard in &manifest.shards {
+                if self
+                    .blockchain
+                    .state
+                    .storage_registry
+                    .active_replica_count(manifest_id, &shard.shard_id)
+                    > 0
+                {
+                    continue;
+                }
+                let historic: Vec<u64> = self
+                    .blockchain
+                    .state
+                    .storage_registry
+                    .deals_for_shard(manifest_id, &shard.shard_id)
+                    .into_iter()
+                    .filter(|deal| !deal.is_active())
+                    .map(|deal| deal.deal_id)
+                    .collect();
+                if let Some(deal_id) = historic.last().copied() {
+                    if let Some(ticket_id) = self
+                        .blockchain
+                        .state
+                        .storage_registry
+                        .open_expiry_reallocation(deal_id, current_epoch)
+                    {
+                        tracing::info!(
+                            "B.U.D. opened repair ticket {ticket_id} for missing shard {} (historic deal {deal_id}) on {}",
+                            hex::encode(shard.shard_id.0),
+                            hex::encode(manifest_id.0)
+                        );
+                    }
+                } else {
+                    tracing::warn!(
+                        "B.U.D. repair band: shard {} of {} has never had a deal; no ticket type exists for a never-placed shard",
+                        hex::encode(shard.shard_id.0),
+                        hex::encode(manifest_id.0)
+                    );
+                }
+            }
+        }
+
+        // F-15: schedule one coding audit per erasure-coded manifest each
+        // epoch. The column is derived from chain entropy; the operator
+        // still has to answer. An unanswered audit is visible, which is
+        // the part that was missing.
+        let last_hash = self.blockchain.last_block().hash.as_bytes().to_vec();
+        let mut scheduled = 0u32;
+        let manifests: Vec<_> = self
+            .blockchain
+            .state
+            .storage_registry
+            .manifests
+            .values()
+            .cloned()
+            .collect();
+        for manifest in manifests {
+            if manifest.erasure.parity_count() == 0 {
+                continue;
+            }
+            let entropy = crate::core::hash::hash_fields_bytes(&[
+                b"BDLM_MAINTENANCE_CODING_AUDIT_V1",
+                &self.blockchain.chain_id.to_le_bytes(),
+                &last_hash,
+                &current_epoch.to_le_bytes(),
+                manifest.manifest_id.as_bytes(),
+            ]);
+            match crate::domain::storage_deal::StorageRegistry::derive_coding_audit(
+                &entropy,
+                &manifest,
+                current_epoch,
+            ) {
+                Ok(audit) => {
+                    scheduled += 1;
+                    tracing::info!(
+                        "B.U.D. coding audit scheduled for {} parity={} column={}",
+                        hex::encode(audit.manifest_id.0),
+                        audit.parity_index,
+                        audit.column
+                    );
+                }
+                Err(error) => tracing::debug!("coding audit not scheduled: {error}"),
+            }
+        }
+        if scheduled > 0 {
+            tracing::info!(
+                "B.U.D. storage maintenance scheduled {scheduled} coding audits at epoch {current_epoch}"
+            );
         }
 
         // Objects already past saving are logged separately and loudly. Left
@@ -2265,11 +2404,38 @@ impl ChainActor {
             .state
             .storage_registry
             .mark_overdue_reallocations_under_replicated(current_epoch);
-        if under_replicated > 0 {
+        if under_replicated > 0 || !repair_band.is_empty() {
             tracing::warn!("B.U.D. storage maintenance marked {under_replicated} reallocation tickets under-replicated at epoch {current_epoch}");
             if let Err(error) = self.blockchain.persist_storage_registry() {
                 tracing::error!("Failed to persist storage reallocation status: {error}");
             }
+        }
+    }
+
+    /// AI registry bakımı: süresi dolan istekler, sonuçlar, geri alınan ücret
+    /// kayıtları ve ihtilaf penceresi kayıtları burada tahliye edilir.
+    ///
+    /// Yazılı mekanizma (`AiRegistry::prune_expired` /
+    /// `expire_dispute_window`) bugüne kadar yalnızca testlerden çağrılıyordu:
+    /// üretimde hiçbir şey çağırmıyordu ve AI registry'si kalıcı state
+    /// büyümesi taşıyordu ("yazıldı ama çağrılmıyor" sınıfı - hafıza dersi).
+    fn run_ai_maintenance(&mut self, block_height: u64) {
+        // İhtilaf penceresi (10_080 blok) aynı zamanda saklama penceresidir:
+        // sonuçlanmamış istekler ve deliller, kesinleşme + itiraz süresi
+        // dolmadan asla silinmez.
+        let retention = crate::ai::registry::DISPUTE_WINDOW_BLOCKS;
+        let pruned = self
+            .blockchain
+            .state
+            .ai_registry
+            .prune_expired(block_height, retention);
+        let expired = self
+            .blockchain
+            .state
+            .ai_registry
+            .expire_dispute_window(block_height);
+        if pruned > 0 || expired > 0 {
+            tracing::info!(%pruned, %expired, "AI registry maintenance at height {block_height}");
         }
     }
 
@@ -2315,6 +2481,7 @@ impl ChainActor {
                     let result = self.blockchain.produce_block(producer);
                     if let Some((ref b, ref cids)) = result {
                         self.run_storage_maintenance(b.index);
+                        self.run_ai_maintenance(b.index);
                         if crate::chain::finality::is_checkpoint_height_for_chain(
                             b.index,
                             self.blockchain.chain_id,
@@ -2332,6 +2499,7 @@ impl ChainActor {
                     let res = self.blockchain.validate_and_add_block(block);
                     if let Ok(ref cids) = res {
                         self.run_storage_maintenance(height);
+                        self.run_ai_maintenance(height);
                         if crate::chain::finality::is_checkpoint_height_for_chain(
                             height,
                             self.blockchain.chain_id,
@@ -2393,7 +2561,11 @@ impl ChainActor {
                     let _ = tx.send(self.blockchain.mempool.len());
                 }
                 ChainCommand::GetValidatorAddress(tx) => {
-                    let addr = self.blockchain.consensus().signer().map(|s| s.address());
+                    let addr = self
+                        .blockchain
+                        .consensus()
+                        .signer()
+                        .map(crate::crypto::signer::ConsensusSigner::address);
                     let _ = tx.send(addr);
                 }
                 ChainCommand::GetAggregatorState(tx) => {
@@ -2631,6 +2803,25 @@ impl ChainActor {
                             .map(|_| ())
                             .map_err(|e| e.to_string()),
                     );
+                }
+                ChainCommand::SetStorageOperatorClass { class, response } => {
+                    let Some(operator) = self
+                        .blockchain
+                        .consensus()
+                        .signer()
+                        .map(crate::crypto::signer::ConsensusSigner::address)
+                    else {
+                        let _ = response.send(Err(
+                            "storage operator class is self-declared by the local signer; no validator key is loaded".into(),
+                        ));
+                        continue;
+                    };
+                    self.blockchain
+                        .state
+                        .storage_registry
+                        .set_operator_class(operator, class);
+                    let persist = self.blockchain.persist_storage_registry();
+                    let _ = response.send(persist);
                 }
                 ChainCommand::BeginRoleBondUnbonding(address, role, res_tx) => {
                     let _ = res_tx.send(
