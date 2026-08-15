@@ -2322,12 +2322,13 @@ impl Node {
                                                    Err(e) => {
                                                        warn!("Failed to apply FinalityCert from {peer_id}: {e}");
                                                        if e.contains("Missing verified QC blob") {
-                                                           let topic = gossipsub::IdentTopic::new("blocks");
-                                                           let req = NetworkMessage::GetQcBlob {
-                                                               epoch,
-                                                               checkpoint_height,
-                                                           };
-                                                           let _ = self.swarm.behaviour_mut().gossipsub.publish(topic, req.to_bytes());
+                                                           // Strix HIGH (#362, 2. denetim): QC blob eksigi
+                                                           // gossip'e GetQcBlob yayinlamaz — bu, FinalityCert
+                                                           // gondererek mesh-geneli QcBlobResponse fan-out'u
+                                                           // tetiklemeye izin verirdi (reflected DoS).
+                                                           warn!(
+                                                               "Missing verified QC blob for FinalityCert from {peer_id}; refusing legacy gossip QC-blob fetch for epoch={epoch}, height={checkpoint_height}"
+                                                           );
                                                        } else {
             let mut pm = self.peer_manager_lock();
                                                            pm.report_bad_behavior(&peer_id);
@@ -2337,23 +2338,13 @@ impl Node {
                                            }
 
                                            NetworkMessage::GetQcBlob { epoch, checkpoint_height } => {
-                                               let rate_limit_ok = self.peer_manager_lock().check_rate_limit(&peer_id);
-                                               if !rate_limit_ok {
-                                                   continue;
-                                               }
-                                               info!("GetQcBlob from {peer_id}: epoch={epoch}, height={checkpoint_height}");
-
-                                               let blob = self.chain.get_qc_blob(checkpoint_height).await;
-                                               let found = blob.is_some();
-                                               let response = NetworkMessage::QcBlobResponse {
-                                                   epoch,
-                                                   checkpoint_height,
-                                                   checkpoint_hash: blob.as_ref().map(|b| b.checkpoint_hash.clone()).unwrap_or_default(),
-                                                   blob_data: blob.as_ref().map(|b| serde_json::to_vec(b).unwrap_or_else(|e| { tracing::error!("Failed to serialize QcBlob for response: {e}"); Vec::new() })).unwrap_or_default(),
-                                                   found,
-                                               };
-                                               let topic = gossipsub::IdentTopic::new("blocks");
-                                               let _ = self.swarm.behaviour_mut().gossipsub.publish(topic, response.to_bytes());
+                                               // Strix HIGH (#362, 2. denetim): gossip uzerinden gelen
+                                               // GetQcBlob isteklerine topic'e yanit publish etmek
+                                               // reflected-amplified DoS'tur (yanit tum mesh'e gider).
+                                               // QC blob alisverisi point-to-point olmali; gossip kolu
+                                               // artik yanit vermez.
+                                               warn!("Ignoring gossip GetQcBlob from {peer_id}: QC blob fetch is point-to-point; refusing epoch={epoch}, height={checkpoint_height}");
+                                               continue;
                                            }
 
                                            NetworkMessage::QcBlobResponse { epoch, checkpoint_height, found, blob_data, .. } => {
