@@ -36,6 +36,7 @@ pub fn register_lubot_model(
         execution_class: 0,
         execution_dims: None,
         execution_weights_digest: None,
+        modalities: crate::lubot::perception::ModalitySet::text_only(),
     };
     registry.register_model(spec)
 }
@@ -56,6 +57,7 @@ pub fn register_lubot_model(
 ///
 /// Yetki geçerli değilse hangi koşulun düştüğünü söyleyen bir mesaj, ya da
 /// `input_ref` sınırı aşıyorsa `BoundedBytes`'ın reddi.
+#[allow(clippy::too_many_arguments)]
 pub fn build_lubot_request(
     requester: Address,
     model_id: AiModelId,
@@ -64,16 +66,16 @@ pub fn build_lubot_request(
     submitted_at_block: u64,
     deadline_block: u64,
     grant: &AccessGrant,
+    perception: Option<crate::lubot::perception::PerceptionRequest>,
 ) -> Result<AiInferenceRequest, String> {
     // Yetki önce. Sınır kontrolünden de önce, çünkü izni olmayan birinin
     // isteğinin neden reddedildiğini öğrenmesi, isteğin biçimi hakkında bilgi
     // vermemeli.
     crate::lubot::validate_inference_grant(grant, &requester, submitted_at_block)?;
     let bounded = BoundedBytes::try_new(input_ref.clone())?;
-    let mut hasher = Sha256::new();
-    hasher.update(b"LUBOT_INPUT_COMMIT_V1");
-    hasher.update(&input_ref);
-    let input_commitment: [u8; 32] = hasher.finalize().into();
+    // Kanonik commitment: admission kapısı aynı fonksiyonla doğrular
+    // (bkz. crate::ai::types::canonical_input_commitment).
+    let input_commitment = crate::ai::types::canonical_input_commitment(&input_ref);
     let mut req = AiInferenceRequest {
         request_id: AiRequestId([0; 32]),
         requester,
@@ -85,6 +87,7 @@ pub fn build_lubot_request(
         submitted_at_block,
         deadline_block,
         effort: crate::lubot::effort::EffortTier::default(),
+        perception,
     };
     // Canonical request_id'yi hesapla → verify_id geçer.
     req.request_id = req.calculate_id();
@@ -152,6 +155,7 @@ mod tests {
             1,
             1000,
             &grant,
+            None,
         )
         .expect("build request");
         assert!(req.verify_id(), "canonical request_id must verify");
@@ -195,8 +199,17 @@ mod tests {
 
         // Issued to somebody else.
         let other = test_grant(Address([7; 32]), 1);
-        let err = build_lubot_request(requester, model_id, b"input".to_vec(), 1, 1, 1000, &other)
-            .expect_err("a grant issued to another consumer must not build a request");
+        let err = build_lubot_request(
+            requester,
+            model_id,
+            b"input".to_vec(),
+            1,
+            1,
+            1000,
+            &other,
+            None,
+        )
+        .expect_err("a grant issued to another consumer must not build a request");
         assert!(err.contains("consumer"), "got: {err}");
 
         // Expired.
@@ -210,6 +223,7 @@ mod tests {
             50,
             1000,
             &expired,
+            None,
         )
         .expect_err("an expired grant must not build a request");
         assert!(err.contains("expired"), "got: {err}");
@@ -217,14 +231,32 @@ mod tests {
         // Quota spent.
         let mut spent = test_grant(requester, 1);
         spent.reads_used = spent.max_reads;
-        let err = build_lubot_request(requester, model_id, b"input".to_vec(), 1, 1, 1000, &spent)
-            .expect_err("an exhausted grant must not build a request");
+        let err = build_lubot_request(
+            requester,
+            model_id,
+            b"input".to_vec(),
+            1,
+            1,
+            1000,
+            &spent,
+            None,
+        )
+        .expect_err("an exhausted grant must not build a request");
         assert!(err.contains("quota"), "got: {err}");
 
         // The canary: a live grant still builds, or the three refusals above
         // could be satisfied by a function that refuses everything.
         let live = test_grant(requester, 1);
-        build_lubot_request(requester, model_id, b"input".to_vec(), 1, 1, 1000, &live)
-            .expect("a live grant must still build a request");
+        build_lubot_request(
+            requester,
+            model_id,
+            b"input".to_vec(),
+            1,
+            1,
+            1000,
+            &live,
+            None,
+        )
+        .expect("a live grant must still build a request");
     }
 }

@@ -34,10 +34,10 @@
 //! becomes an expensive one for whoever runs the operator. Each modality
 //! carries its own ceiling, expressed in its own unit.
 //!
-//! WIRING: unwired - measured: no production path constructs a
-//! `PerceptionRequest` yet. The declaration, its bounds and its refusals are
-//! here and tested; the inference path that carries one is a consensus
-//! surface change and lands with the request-format revision.
+//! WIRING: wired - `PerceptionRequest` is constructed on the RPC surface
+//! (`bud_aiSubmitRequest`) and the wire format, carried in
+//! `AiInferenceRequest::perception`, and refused or admitted by
+//! `lubot::admit_inference_request` on both executor paths.
 
 use crate::core::hash::hash_fields_bytes;
 use crate::pollen::AssetId;
@@ -91,12 +91,31 @@ pub enum PerceptionKind {
 impl PerceptionKind {
     /// Stable byte tag for the commitment, so the hash does not depend on
     /// declaration order.
-    const fn perception_tag(self) -> u8 {
+    ///
+    /// `pub` because the wire format (`proto_conversions`) and the request-id
+    /// commitment (`ai::types`) hash this tag outside the module.
+    #[must_use]
+    pub const fn perception_tag(self) -> u8 {
         match self {
             Self::Text => 1,
             Self::Image => 2,
             Self::Audio => 3,
             Self::Video => 4,
+        }
+    }
+
+    /// Reverse of [`Self::perception_tag`], for wire-format decoding.
+    /// An unknown tag is refused rather than mapped onto text: treating an
+    /// unrecognised modality as text is exactly how a video frame gets
+    /// admitted to a text model.
+    #[must_use]
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Text),
+            2 => Some(Self::Image),
+            3 => Some(Self::Audio),
+            4 => Some(Self::Video),
+            _ => None,
         }
     }
 
@@ -210,6 +229,16 @@ impl ModalitySet {
     /// A text-only model, which is what most of them are.
     pub const fn text_only() -> Self {
         Self(1 << 0)
+    }
+
+    /// From raw bits (wire/registration surface). Zero is the honest
+    /// "declaration lost" value: the set refuses everything rather than
+    /// accepting all. Callers that mean legacy-text must say `text_only`
+    /// explicitly; the wire format reserves 0 for legacy peers and reads it
+    /// as text, documented at the proto field.
+    #[must_use]
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
     }
 
     fn bit(kind: PerceptionKind) -> u32 {

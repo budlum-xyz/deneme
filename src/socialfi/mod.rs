@@ -137,7 +137,7 @@ impl NftRegistry {
     pub fn root(&self) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
-        hasher.update(b"BDLM_NFT_REGISTRY_V4");
+        hasher.update(b"BDLM_NFT_REGISTRY_V5");
         hasher.update(self.next_id.to_le_bytes());
         for (id, nft) in &self.nfts {
             hasher.update(id.to_le_bytes());
@@ -145,12 +145,21 @@ impl NftRegistry {
             hasher.update(nft.content_id.0);
             hasher.update(nft.luminance.to_le_bytes());
             hasher.update(nft.minted_at_epoch.to_le_bytes());
-            if let Some(ref name) = nft.author_name {
-                hasher.update(b"name:");
-                hasher.update(name.as_bytes());
+            // Strix MEDIUM (#360, yeni tur): uzunluk-öneksiz metadata
+            // hash değeri belirsiz sınırlar üretiyordu (isim/etiket bayt akışında
+            // bitişik). V5: alan marker'ı + uzunluk öneki; None/Some ayrımı
+            // açık marker ile.
+            match nft.author_name.as_ref() {
+                Some(name) => {
+                    hasher.update(b"name:");
+                    hasher.update(name.len().to_le_bytes());
+                    hasher.update(name.as_bytes());
+                }
+                None => hasher.update(b"noname"),
             }
             for tag in &nft.tags {
                 hasher.update(b"tag:");
+                hasher.update(tag.len().to_le_bytes());
                 hasher.update(tag.as_bytes());
             }
         }

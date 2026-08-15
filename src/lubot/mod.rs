@@ -88,6 +88,68 @@ pub fn operator_eligible(registry: &AiRegistry, operator: &Address) -> bool {
     registry.is_staked_verifier(operator)
 }
 
+/// Executor giriş kapısı: bir çıkarım isteği, okuma beyanı ve modelin
+/// kayıtlı modaliteleri açısından kabul edilebilir mi?
+///
+/// Fail-closed denetimler, sırayla:
+/// 1. Beyan yoksa red - ne okuduğunu söylemeyen istek, metin modele
+///    görüntü vermenin yoludur (V3 öncesi istekler).
+/// 2. Model bu modaliteyi kayıtta beyan etmemişse red. Kayıtlı olmayan
+///    model boş küme varsayılır (`ModalitySet::none`): her şey reddedilir.
+/// 3. Beyan kendi tavanlarına uymuyorsa red (`check_admissible`).
+/// 4. `input_ref` bir Pollen referansı taşıyorsa, beyandaki varlıkla aynı
+///    varlığı göstermeli - A varlığı için izin alıp B'yi okumak kapanır.
+///
+/// İzin KURALLARI burada kopyalanmaz: Pollen denetimi executor'un
+/// `validate_ai_read_ref` çağrısında zaten yapılır; bu kapı yalnızca
+/// okumanın NE olduğunu (modalite + varlık tutarlılığı) denetler.
+///
+/// # Errors
+///
+/// İstek perception beyanı taşımıyorsa veya model kaydı yoksa hata döner.
+pub fn admit_inference_request(
+    registry: &crate::ai::AiRegistry,
+    req: &crate::ai::types::AiInferenceRequest,
+) -> Result<(), String> {
+    let perception = req
+        .perception
+        .clone()
+        .ok_or_else(|| "çıkarım isteği perception beyanı taşımalı (V3)".to_string())?;
+    let modalities = registry
+        .models
+        .get(&req.model_id)
+        .map_or(crate::lubot::perception::ModalitySet::none(), |m| {
+            m.modalities
+        });
+    if !modalities.declares_modality(perception.kind) {
+        return Err(format!(
+            "model {} {:?} modalitesini beyan etmemiş",
+            req.model_id.to_hex(),
+            perception.kind
+        ));
+    }
+    perception
+        .check_admissible(modalities)
+        .map_err(|e| e.to_string())?;
+    if let Ok(Some(data_ref)) =
+        crate::pollen::data_rights::AiDataInputRef::decode(req.input_ref.as_slice())
+    {
+        if data_ref.asset_id != perception.asset_id {
+            return Err("perception beyanı ile input_ref farklı varlıkları gösteriyor".to_string());
+        }
+    }
+    // Kanonik commitment denetimi: input_commitment, input_ref'in kanonik
+    // ön imajı olmalı. Aksi halde aynı içerik, keyfi farklı commitment'lar
+    // altında ayrı istek kimlikleri üretir ve operatör işini ücretsiz
+    // çoğaltır (dedup/replay korumasının dayandığı değişmez).
+    if req.input_commitment
+        != crate::ai::types::canonical_input_commitment(req.input_ref.as_slice())
+    {
+        return Err("input_commitment kanonik ön imajla eşleşmiyor".to_string());
+    }
+    Ok(())
+}
+
 // Pollen hardening: kapalı-devre inference grant doğrulaması
 
 /// Is an `AccessGrant` usable for a Lubot inference right now?
@@ -239,14 +301,19 @@ impl SocialDataRef {
 
 /// Bir Lubot çıkarımı için kapalı-devre Pollen AccessGrant inşa et.
 ///
-/// Veri sahibi, Lubot operator'üne (grantee) sınırlı okuma yetkisi verir.
-/// `owner_signature` SENTINEL'dır (gerçek imza imzalama adımı ayrı).
+/// F-12: the production AI read path (`validate_ai_read_ref`) is
+/// requester-bound. `grantee` must be the inference requester, not the
+/// operator. The operator executes the job; it is not the account that
+/// holds the data grant. `payer` is the same requester: they are the
+/// party that paid for the read.
+///
+/// `owner_signature` is SENTINEL here (signing is a separate step).
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn build_lubot_inference_grant(
     asset_id: crate::pollen::AssetId,
     owner: Address,
-    grantee: Address,
+    requester: Address,
     price_paid: u64,
     issued_at_block: u64,
     expires_at_block: u64,
@@ -256,8 +323,8 @@ pub fn build_lubot_inference_grant(
     AccessGrant::new_unsigned(
         asset_id,
         owner,
-        grantee,
-        grantee, // payer = grantee (operator öder)
+        requester,
+        requester,
         price_paid,
         issued_at_block,
         expires_at_block,
@@ -269,6 +336,7 @@ pub fn build_lubot_inference_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::types::AiModelId;
 
     fn addr(b: u8) -> Address {
         Address([b; 32])
@@ -429,6 +497,7 @@ mod tests {
             1,
             1000,
             &grant,
+            None,
         )
         .expect("build tx");
 
@@ -457,5 +526,142 @@ mod tests {
             super::register_operator(&mut registry, &operator, MIN_OPERATOR_BOND).is_ok(),
             "the floor itself must be accepted"
         );
+    }
+
+    // --- admit_inference_request kapı testleri (V3) ---
+
+    fn text_perception() -> crate::lubot::perception::PerceptionRequest {
+        crate::lubot::perception::PerceptionRequest {
+            asset_id: crate::pollen::AssetId([1; 32]),
+            content_id: crate::storage::content_id::ContentId([2; 32]),
+            kind: crate::lubot::perception::PerceptionKind::Text,
+            declared_units: 100,
+        }
+    }
+
+    fn text_request(
+        model_id: AiModelId,
+        perception: Option<crate::lubot::perception::PerceptionRequest>,
+    ) -> crate::ai::types::AiInferenceRequest {
+        crate::ai::types::AiInferenceRequest {
+            request_id: crate::ai::types::AiRequestId([0; 32]),
+            requester: Address([2; 32]),
+            model_id,
+            input_commitment: crate::ai::types::canonical_input_commitment(&[]),
+            input_ref: crate::ai::types::BoundedBytes::empty(),
+            max_fee: 10,
+            callback: None,
+            submitted_at_block: 1,
+            deadline_block: 100,
+            effort: crate::lubot::effort::EffortTier::default(),
+            perception,
+        }
+    }
+
+    #[test]
+    fn admit_rejects_request_without_declaration() {
+        let mut registry = AiRegistry::new();
+        let model_id =
+            super::inference::register_lubot_model(&mut registry, Address([1; 32]), [9u8; 32])
+                .unwrap();
+        let req = text_request(model_id, None);
+        assert!(super::admit_inference_request(&registry, &req).is_err());
+    }
+
+    #[test]
+    fn admit_rejects_modality_model_did_not_declare() {
+        let mut registry = AiRegistry::new();
+        let model_id =
+            super::inference::register_lubot_model(&mut registry, Address([1; 32]), [9u8; 32])
+                .unwrap();
+        let mut p = text_perception();
+        p.kind = crate::lubot::perception::PerceptionKind::Image;
+        let req = text_request(model_id, Some(p));
+        assert!(super::admit_inference_request(&registry, &req).is_err());
+    }
+
+    #[test]
+    fn admit_accepts_declared_text_read() {
+        let mut registry = AiRegistry::new();
+        let model_id =
+            super::inference::register_lubot_model(&mut registry, Address([1; 32]), [9u8; 32])
+                .unwrap();
+        let req = text_request(model_id, Some(text_perception()));
+        assert!(super::admit_inference_request(&registry, &req).is_ok());
+    }
+
+    #[test]
+    fn admit_rejects_asset_mismatch_between_ref_and_declaration() {
+        let mut registry = AiRegistry::new();
+        let model_id =
+            super::inference::register_lubot_model(&mut registry, Address([1; 32]), [9u8; 32])
+                .unwrap();
+        // input_ref varlık A'yı işaret ediyor; beyan varlık B'yi.
+        let data_ref = crate::pollen::data_rights::AiDataInputRef {
+            asset_id: crate::pollen::AssetId([7; 32]),
+            grant_id: crate::pollen::AssetId([8; 32]),
+        };
+        let mut req = text_request(model_id, Some(text_perception()));
+        req.input_ref = crate::ai::types::BoundedBytes::try_new(data_ref.encode()).unwrap();
+        assert!(super::admit_inference_request(&registry, &req).is_err());
+    }
+
+    #[test]
+    fn admit_rejects_non_canonical_input_commitment() {
+        let mut registry = AiRegistry::new();
+        let model_id =
+            super::inference::register_lubot_model(&mut registry, Address([1; 32]), [9u8; 32])
+                .unwrap();
+        // Kanonik commitment ile geçer.
+        let mut req = text_request(model_id, Some(text_perception()));
+        assert!(super::admit_inference_request(&registry, &req).is_ok());
+        // Aynı içerik, keyfi commitment → red (istek çoğaltma değişmezi).
+        req.input_commitment = [1; 32];
+        assert!(super::admit_inference_request(&registry, &req).is_err());
+    }
+
+    #[test]
+    fn model_spec_rejects_poisoned_execution_dims() {
+        use crate::ai::types::AiModelSpec;
+
+        let owner = Address([1; 32]);
+        let mut base = AiModelSpec {
+            model_id: AiModelId([9u8; 32]),
+            model_hash: [9u8; 32],
+            owner,
+            min_verifier_count: 1,
+            agreement_threshold: 1,
+            max_input_ref_bytes: 1024,
+            max_output_ref_bytes: 1024,
+            request_deadline_blocks: 1000,
+            result_deadline_blocks: 1000,
+            version: 1,
+            active: true,
+            require_execution_proof: false,
+            execution_program_hash: None,
+            execution_class: 0,
+            execution_dims: None,
+            execution_weights_digest: None,
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
+        };
+
+        // 0 boyutlu katman red.
+        let mut bad = base.clone();
+        bad.execution_dims = Some(vec![0, 4]);
+        assert!(bad.validate().is_err(), "0 boyutlu katman kabul edilmemeli");
+
+        // Tek katman red.
+        let mut bad = base.clone();
+        bad.execution_dims = Some(vec![8]);
+        assert!(bad.validate().is_err(), "tek katman kabul edilmemeli");
+
+        // 33 katman red.
+        let mut bad = base.clone();
+        bad.execution_dims = Some(vec![4; 33]);
+        assert!(bad.validate().is_err(), "33 katman kabul edilmemeli");
+
+        // Geçerli şekil kabul.
+        base.execution_dims = Some(vec![8, 4, 4]);
+        assert!(base.validate().is_ok(), "geçerli dims kabul edilmeli");
     }
 }

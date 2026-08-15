@@ -61,6 +61,7 @@ pub fn build_lubot_transaction(
     current_block: u64,
     deadline_block: u64,
     grant: &crate::pollen::data_rights::AccessGrant,
+    perception: Option<crate::lubot::perception::PerceptionRequest>,
 ) -> Result<Transaction, String> {
     let req = inference::build_lubot_request(
         from,
@@ -70,6 +71,7 @@ pub fn build_lubot_transaction(
         current_block,
         deadline_block,
         grant,
+        perception,
     )?;
     Ok(Transaction::new_with_chain_id(
         from,
@@ -114,6 +116,7 @@ mod tests {
             1,
             1000,
             &grant,
+            None,
         )
         .expect("build tx");
         // Transaction type must be AiInferenceRequest.
@@ -133,6 +136,7 @@ mod tests {
             submitted_at_block: 1,
             deadline_block: 1000,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         let exec = LubotExecutorRequest::from_inference_request(&req);
         assert_eq!(exec.request_id, AiRequestId([1; 32]));
