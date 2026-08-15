@@ -7,6 +7,7 @@
 use crate::core::address::Address;
 use crate::storage::content_id::ContentId;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use super::{
@@ -853,6 +854,7 @@ mod tests {
 
     /// Satin alma istegi icin buyer imzasi (Strix #358, 2. denetim).
     /// `buyer_byte`, buyer adresini ureten test keypair'inin byte'idir.
+    #[allow(clippy::too_many_arguments)]
     fn signed_purchase(
         registry: &MarketplaceRegistry,
         authorization_id: SaleAuthorizationId,
