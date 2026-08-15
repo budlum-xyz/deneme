@@ -417,7 +417,9 @@ impl RpcServer {
                     "treasury_percent": 5,
                 },
             },
-            "data_layer": "requester-bound Pollen AccessGrant checks live; operator grant builder mismatch open",
+            "data_layer": "requester-bound Pollen AccessGrant checks live; grant builder issues to requester (F-12 closed)",
+            "verification_level": "structural_envelope_checks_only",
+            "verification_level_note": "results are not STARK-proven (F-05); full_execution_proof_verification remains false",
         })
     }
 
@@ -2933,6 +2935,22 @@ impl BudlumApiServer for RpcServer {
     }
 
     async fn gateway_fetch_content(&self, name: String) -> Result<String, ErrorObjectOwned> {
+        // Strix HIGH (#364, deneme): Pollen korumali icerik, AccessGrant
+        // olmadan bu RPC uzerinden cekilememeli. storage_get_manifest ve
+        // storage_get_deals_* handler'lariyla ayni desen: koruyucu asset
+        // varsa yalnizca metadata (burada hicbir sey) donulur.
+        let resolved = self.chain.bns_resolve_full(name.clone()).await;
+        let storage_root = resolved.as_ref().and_then(|r| r.storage_root);
+        if let Some(root) = storage_root {
+            let cid = crate::storage::ContentId(root);
+            if self.chain.pollen_asset_for_content(cid).await.is_some() {
+                return Err(ErrorObjectOwned::owned(
+                    -32603,
+                    "Content is Pollen-protected; an AccessGrant is required",
+                    None::<()>,
+                ));
+            }
+        }
         let gateway =
             crate::gateway::BudGateway::new(self.chain.clone(), Some(self.node.clone()), None);
         let data = gateway.fetch_name_content(&name).await.map_err(|e| {
@@ -3094,6 +3112,7 @@ impl BudlumApiServer for RpcServer {
         max_output_ref_bytes: u64,
         request_deadline_blocks: u64,
         result_deadline_blocks: u64,
+        modality_bits: Option<u32>,
     ) -> Result<serde_json::Value, ErrorObjectOwned> {
         let clean_owner = owner.strip_prefix("0x").unwrap_or(&owner);
         let owner_addr = crate::core::address::Address::from_hex(clean_owner).map_err(|e| {
@@ -3132,6 +3151,10 @@ impl BudlumApiServer for RpcServer {
             execution_class: 0,
             execution_dims: None,
             execution_weights_digest: None,
+            modalities: modality_bits.map_or_else(
+                crate::lubot::perception::ModalitySet::text_only,
+                crate::lubot::perception::ModalitySet::from_bits,
+            ),
         };
 
         let tx = crate::core::transaction::Transaction {
@@ -3170,6 +3193,10 @@ impl BudlumApiServer for RpcServer {
         max_fee: u64,
         callback: Option<String>,
         deadline_block: u64,
+        perception_asset_id: Option<String>,
+        perception_content_id: Option<String>,
+        perception_kind_tag: Option<u32>,
+        perception_declared_units: Option<u32>,
     ) -> Result<serde_json::Value, ErrorObjectOwned> {
         let clean_req = requester.strip_prefix("0x").unwrap_or(&requester);
         let req_addr = crate::core::address::Address::from_hex(clean_req).map_err(|e| {
@@ -3237,6 +3264,78 @@ impl BudlumApiServer for RpcServer {
             _ => None,
         };
 
+        let perception = match (
+            perception_asset_id,
+            perception_content_id,
+            perception_kind_tag,
+            perception_declared_units,
+        ) {
+            (Some(a), Some(c), Some(k), Some(u)) => {
+                let aid_bytes = hex::decode(a.strip_prefix("0x").unwrap_or(&a)).map_err(|e| {
+                    ErrorObjectOwned::owned(
+                        -32602,
+                        format!("Invalid perception asset_id hex: {e}"),
+                        None::<()>,
+                    )
+                })?;
+                if aid_bytes.len() != 32 {
+                    return Err(ErrorObjectOwned::owned(
+                        -32602,
+                        "perception asset_id must be 32 bytes",
+                        None::<()>,
+                    ));
+                }
+                let mut aid = [0u8; 32];
+                aid.copy_from_slice(&aid_bytes);
+                let cid_bytes = hex::decode(c.strip_prefix("0x").unwrap_or(&c)).map_err(|e| {
+                    ErrorObjectOwned::owned(
+                        -32602,
+                        format!("Invalid perception content_id hex: {e}"),
+                        None::<()>,
+                    )
+                })?;
+                if cid_bytes.len() != 32 {
+                    return Err(ErrorObjectOwned::owned(
+                        -32602,
+                        "perception content_id must be 32 bytes",
+                        None::<()>,
+                    ));
+                }
+                let mut cid = [0u8; 32];
+                cid.copy_from_slice(&cid_bytes);
+                let kind = crate::lubot::perception::PerceptionKind::from_tag(
+                    u8::try_from(k).map_err(|_| {
+                        ErrorObjectOwned::owned(
+                            -32602,
+                            "perception kind tag out of range",
+                            None::<()>,
+                        )
+                    })?,
+                )
+                .ok_or_else(|| {
+                    ErrorObjectOwned::owned(
+                        -32602,
+                        format!("unknown perception kind tag: {k}"),
+                        None::<()>,
+                    )
+                })?;
+                Some(crate::lubot::perception::PerceptionRequest {
+                    asset_id: crate::pollen::AssetId(aid),
+                    content_id: crate::storage::content_id::ContentId(cid),
+                    kind,
+                    declared_units: u,
+                })
+            }
+            (None, None, None, None) => None,
+            _ => {
+                return Err(ErrorObjectOwned::owned(
+                    -32602,
+                    "perception parametreleri ya tamamen verilmeli ya hiç verilmemeli",
+                    None::<()>,
+                ));
+            }
+        };
+
         let current_height = self.chain.get_height().await;
         let mut req = crate::ai::types::AiInferenceRequest {
             request_id: crate::ai::types::AiRequestId::default(),
@@ -3249,6 +3348,7 @@ impl BudlumApiServer for RpcServer {
             submitted_at_block: current_height,
             deadline_block,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception,
         };
         req.request_id = req.calculate_id();
 

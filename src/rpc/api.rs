@@ -655,6 +655,19 @@ pub trait BudlumApi {
 
     /// Prepare a model registration transaction.
     #[method(name = "bud_aiRegisterModel")]
+    /// Prepare an AI model registration transaction template.
+    ///
+    /// The governance-tunable registration fee
+    /// (`RegistryParams::ai_model_register_fee`) must be attached as
+    /// `tx.amount`; the template sets amount 0 - the caller signs the final
+    /// amount. Below-fee registrations are rejected atomically by the
+    /// executor (`ai_model_register_fee_insufficient`).
+    /// Register an AI model (template; the governance-tunable registration
+    /// fee must be attached as tx.amount - see `ai_model_register_fee`).
+    ///
+    /// Modalite bitleri (`ModalitySet`). Yok = eski davranış (`text_only`).
+    /// 0 = hiçbir şey okumaz (`none` - bilinçli red). 1 = metin.
+    #[method(name = "bud_aiRegisterModel")]
     async fn ai_register_model(
         &self,
         owner: String,
@@ -665,9 +678,15 @@ pub trait BudlumApi {
         max_output_ref_bytes: u64,
         request_deadline_blocks: u64,
         result_deadline_blocks: u64,
+        modality_bits: Option<u32>,
     ) -> Result<serde_json::Value, ErrorObjectOwned>;
 
     /// Prepare an AI inference request transaction.
+    ///
+    /// Perception beyanı: varlık (32B hex), içerik (32B hex), tür etiketi
+    /// (1=metin, 2=görüntü, 3=ses, 4=video), birim miktarı. Dördü birden
+    /// verilirse istek V3 beyanıyla inşa edilir; hiçbiri verilmezse
+    /// beyansız inşa edilir (executor fail-closed reddeder).
     #[method(name = "bud_aiSubmitRequest")]
     async fn ai_submit_request(
         &self,
@@ -678,6 +697,10 @@ pub trait BudlumApi {
         max_fee: u64,
         callback: Option<String>,
         deadline_block: u64,
+        perception_asset_id: Option<String>,
+        perception_content_id: Option<String>,
+        perception_kind_tag: Option<u32>,
+        perception_declared_units: Option<u32>,
     ) -> Result<serde_json::Value, ErrorObjectOwned>;
 
     /// Prepare an AI inference attestation result transaction.
