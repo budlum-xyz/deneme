@@ -7,8 +7,12 @@ use crate::execution::executor::Executor;
 use crate::pollen::{AccessGrant, AiDataInputRef, DataAsset, GrantId, Signature64};
 use crate::storage::content_id::ContentId;
 
+fn test_keypair(byte: u8) -> crate::crypto::primitives::KeyPair {
+    crate::crypto::primitives::KeyPair::from_seed(&[byte; 32]).expect("deterministic test keypair")
+}
+
 fn addr(byte: u8) -> Address {
-    Address::from([byte; 32])
+    Address::from(test_keypair(byte).public_key_bytes())
 }
 
 fn model_spec(owner: Address) -> AiModelSpec {
@@ -100,7 +104,9 @@ fn signed_grant(asset: &DataAsset, grantee: Address, max_reads: u32) -> AccessGr
         max_reads,
         [0xD7; 32],
     );
-    grant.owner_signature = Signature64::from([0x55; 64]);
+    // Owner imzasi: asset.owner = addr(1) test keypair'i ile.
+    let signer = test_keypair(1);
+    grant.owner_signature = Signature64::from(signer.sign(&grant.signing_hash()));
     grant
 }
 
@@ -196,7 +202,10 @@ fn signed_sale_authorization(asset: &DataAsset) -> crate::pollen::SaleAuthorizat
         2,
         [0xA4; 32],
     );
-    authorization.seller_signature = Signature64::from([0x33; 64]);
+    // Seller imzasi: asset.owner = addr(1) test keypair'i ile.
+    let signer = test_keypair(1);
+    authorization.seller_signature =
+        Signature64::from(signer.sign(&authorization.signing_hash()));
     authorization
 }
 
