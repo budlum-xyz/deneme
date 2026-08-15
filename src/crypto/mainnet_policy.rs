@@ -116,6 +116,12 @@ pub fn check_mainnet_validator_key_policy(
     if module.is_empty() {
         return Err(MainnetKeyPolicyViolation::MissingPkcs11ModulePath);
     }
+    // Strix HIGH (#352, yeni tur): SoftHSM modül YOLU (libsofthsm2.so)
+    // `pkcs11` backend'iyle geçebiliyordu; "softhsm" backend reddi tek
+    // başına yetersizdi. Yolda softhsm geçiyorsa aynı ihlaldir.
+    if module.to_ascii_lowercase().contains("softhsm") {
+        return Err(MainnetKeyPolicyViolation::SoftwareHsmBackend);
+    }
     let pin_env = cfg.pkcs11_token_pin_env.unwrap_or("");
     if pin_env.is_empty() {
         return Err(MainnetKeyPolicyViolation::MissingPkcs11PinEnv);

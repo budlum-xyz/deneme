@@ -219,6 +219,19 @@ impl Pkcs11Signer {
     }
 
     pub fn store_bls_key(&self, keypair: &BlsKeypair) -> Result<(), CryptoError> {
+        // Strix HIGH: fallback anahtarları okunabilir PKCS#11 DATA object
+        // olarak yazılıyordu. `CKA_EXTRACTABLE=false` bir gizlilik vaadi
+        // değildir: DATA object'ler salt okunur değer taşır ve yazılımda
+        // üretilmiş anahtar zaten işlem belleğindedir - HSM'ye yazmak
+        // saklama kazandırmaz, yanlış bir "donanım koruması" hissi verir.
+        // Bu yüzden yazılım-fallback modunda saklama reddedilir; yalnızca
+        // vendor-native oturumlar (strict_vendor_native) anahtar saklayabilir.
+        if !self.strict_vendor_native {
+            return Err(CryptoError::Signing(
+                "BLS key storage refused in software-fallback mode: DATA objects are not hardware custody"
+                    .into(),
+            ));
+        }
         let guard = self
             .inner
             .lock()
@@ -236,6 +249,14 @@ impl Pkcs11Signer {
     }
 
     pub fn store_pq_key(&self, keypair: &PqKeyPair) -> Result<(), CryptoError> {
+        // Strix HIGH: aynı gerekçe - PQ secret'ı yazılım-fallback modunda
+        // DATA object olarak saklanamaz (bkz. store_bls_key).
+        if !self.strict_vendor_native {
+            return Err(CryptoError::Signing(
+                "PQ key storage refused in software-fallback mode: DATA objects are not hardware custody"
+                    .into(),
+            ));
+        }
         let guard = self
             .inner
             .lock()
