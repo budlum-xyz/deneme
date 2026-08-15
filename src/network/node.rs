@@ -1856,36 +1856,22 @@ impl Node {
                                            }
 
                                            NetworkMessage::GetHeaders { locator, limit } => {
+                                               // Strix HIGH (#362, deneme): gossip uzerinden gelen
+                                               // GetHeaders/GetBlocksRange/GetBlocksByHeight isteklerine
+                                               // topic'e yanit publish etmek reflected-amplified DoS'tur
+                                               // (yanit tum mesh'e gider, istekciye degil). Bu istekler
+                                               // yalnizca peer-bound request_response (/sync) uzerinden
+                                               // karsilanir; gossip kolu artik yanit vermez.
                                                if let Err(error) = NetworkMessage::validate_header_request(&locator, limit) {
-                                                   warn!("Rejected invalid GetHeaders from {}: {:?}", peer_id, error);
+                                                   warn!("Rejected invalid gossip GetHeaders from {}: {:?}", peer_id, error);
                                                    {
                                                        let mut pm = self.peer_manager_lock();
                                                        pm.report_bad_behavior(&peer_id);
                                                    }
                                                    continue;
                                                }
-                                               info!("GetHeaders request from {} (locator: {} hashes, limit: {})",
-                                                   peer_id, locator.len(), limit);
-
-                                               let start_idx_opt = self.chain.find_common_height(locator).await;
-                                               let start_idx = start_idx_opt.map_or(0, |i| i + 1) as usize;
-
-                                               let height = self.chain.get_height().await + 1;
-                                               let end_idx = start_idx
-                                                   .saturating_add(limit as usize)
-                                                   .min(height as usize);
-
-                                               let mut headers = Vec::new();
-                                               for h in start_idx..end_idx {
-                                                   if let Some(block) = self.chain.get_block(h as u64).await {
-                                                       headers.push(crate::core::block::BlockHeader::from_block(&block));
-                                                   }
-                                               }
-
-                                               info!("Sending {} headers to {}", headers.len(), peer_id);
-                                               let response = NetworkMessage::Headers(headers);
-                                               let topic = gossipsub::IdentTopic::new("blocks");
-                                               let _ = self.swarm.behaviour_mut().gossipsub.publish(topic, response.to_bytes());
+                                               warn!("Ignoring gossip GetHeaders from {peer_id}: sync is point-to-point (request_response)");
+                                               continue;
                                            }
 
                                            NetworkMessage::Headers(headers) => {
@@ -1915,6 +1901,8 @@ impl Node {
                                            }
 
                                            NetworkMessage::GetBlocksRange { from, to } => {
+                                               // Strix HIGH (#362, deneme): gossip yaniti publish etme —
+                                               // senkron peer-bound request_response uzerinden isler.
                                                if from > to {
                                                    warn!("Rejected inverted block range from {peer_id}: {from}..{to}");
                                                    {
@@ -1923,28 +1911,8 @@ impl Node {
                                                    }
                                                    continue;
                                                }
-                                               info!("GetBlocksRange request from {peer_id} ({from}..{to})");
-                                               let our_height = self.chain.get_height().await + 1;
-
-                                               let from_idx = usize::try_from(from).unwrap_or(usize::MAX);
-                                               let to_idx = usize::try_from(to)
-                                                   .unwrap_or(usize::MAX)
-                                                   .min(our_height as usize);
-                                               let max_blocks = crate::network::protocol::MAX_CHAIN_SYNC_BLOCKS;
-                                               let to_idx = to_idx.min(from_idx.saturating_add(max_blocks));
-
-                                               if (from_idx as u64) < our_height {
-                                                   let mut blocks = Vec::new();
-                                                   for h in from_idx..to_idx {
-                                                       if let Some(block) = self.chain.get_block(h as u64).await {
-                                                           blocks.push(block);
-                                                       }
-                                                   }
-                                                   info!("Sending {} blocks to {}", blocks.len(), peer_id);
-                                                   let response = NetworkMessage::Blocks(blocks);
-                                                   let topic = gossipsub::IdentTopic::new("blocks");
-                                                   let _ = self.swarm.behaviour_mut().gossipsub.publish(topic, response.to_bytes());
-                                               }
+                                               warn!("Ignoring gossip GetBlocksRange from {peer_id}: sync is point-to-point (request_response)");
+                                               continue;
                                            }
 
                                            NetworkMessage::Blocks(blocks) => {
@@ -2048,22 +2016,10 @@ impl Node {
                                            }
 
                                            NetworkMessage::GetBlocksByHeight { from_height, to_height } => {
-                                               info!("GetBlocksByHeight [{from_height}, {to_height}] from {peer_id}");
-                                               let mut blocks = Vec::new();
-                                               for h in from_height..=to_height {
-                                                   if let Some(b) = self.chain.get_block(h).await {
-                                                       blocks.push(b);
-                                                       if blocks.len() >= crate::network::protocol::MAX_SNAP_BATCH as usize {
-                                                           break;
-                                                       }
-                                                   } else {
-                                                       break;
-                                                   }
-                                               }
-                                               info!("Sending {} blocks by height to {}", blocks.len(), peer_id);
-                                               let response = NetworkMessage::BlocksByHeight(blocks);
-                                               let topic = gossipsub::IdentTopic::new("blocks");
-                                               let _ = self.swarm.behaviour_mut().gossipsub.publish(topic, response.to_bytes());
+                                               // Strix HIGH (#362, deneme): gossip yaniti publish etme —
+                                               // senkron peer-bound request_response uzerinden isler.
+                                               warn!("Ignoring gossip GetBlocksByHeight [{from_height}, {to_height}] from {peer_id}: sync is point-to-point (request_response)");
+                                               continue;
                                            }
 
                                            NetworkMessage::BlocksByHeight(blocks) => {

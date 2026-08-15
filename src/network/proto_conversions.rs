@@ -16,7 +16,7 @@ fn decode_optional_hash32(bytes: Vec<u8>, field: &str) -> Result<Option<[u8; 32]
 }
 use crate::network::protocol::NetworkMessage;
 
-#[allow(clippy::all)]
+#[allow(clippy::all, clippy::pedantic, clippy::nursery)]
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/budlum.network.rs"));
 }
@@ -179,6 +179,7 @@ impl From<&Transaction> for pb::ProtoTransaction {
                             .as_ref()
                             .map(|dims| dims.iter().map(|d| u32::from(*d)).collect())
                             .unwrap_or_default(),
+                        modality_bits: spec.modalities.bits(),
                     },
                 )),
             ),
@@ -199,6 +200,12 @@ impl From<&Transaction> for pb::ProtoTransaction {
                         submitted_at_block: req.submitted_at_block,
                         deadline_block: req.deadline_block,
                         effort_tenths: u32::from(req.effort.tenths()),
+                        perception: req.perception.clone().map(|p| pb::ProtoPerceptionRequest {
+                            asset_id: p.asset_id.0.to_vec(),
+                            content_id: p.content_id.0.to_vec(),
+                            kind_tag: u32::from(p.kind.perception_tag()),
+                            declared_units: p.declared_units,
+                        }),
                     },
                 )),
             ),
@@ -968,6 +975,13 @@ impl TryFrom<pb::ProtoTransaction> for Transaction {
                         }
                         Some(dims)
                     },
+                    // Wire 0 = legacy peer: those models read text, the
+                    // same reading `#[serde(default)]` gives a stored spec.
+                    modalities: if payload.modality_bits == 0 {
+                        crate::lubot::perception::ModalitySet::text_only()
+                    } else {
+                        crate::lubot::perception::ModalitySet::from_bits(payload.modality_bits)
+                    },
                 })
             }
             pb::ProtoTransactionType::AiInferenceRequest => {
@@ -1018,6 +1032,34 @@ impl TryFrom<pb::ProtoTransaction> for Transaction {
                         let tenths = u16::try_from(payload.effort_tenths)
                             .map_err(|_| "effort tier does not fit in u16".to_string())?;
                         crate::lubot::effort::EffortTier::from_tenths(tenths)?
+                    },
+                    perception: match payload.perception {
+                        Some(p) => {
+                            if p.asset_id.len() != 32 || p.content_id.len() != 32 {
+                                return Err(
+                                    "perception asset_id and content_id must be 32 bytes".into()
+                                );
+                            }
+                            let mut aid = [0u8; 32];
+                            aid.copy_from_slice(&p.asset_id);
+                            let mut cid = [0u8; 32];
+                            cid.copy_from_slice(&p.content_id);
+                            let kind = crate::lubot::perception::PerceptionKind::from_tag(
+                                u8::try_from(p.kind_tag).map_err(|_| {
+                                    "perception kind tag does not fit in u8".to_string()
+                                })?,
+                            )
+                            .ok_or_else(|| {
+                                format!("unknown perception kind tag: {}", p.kind_tag)
+                            })?;
+                            Some(crate::lubot::perception::PerceptionRequest {
+                                asset_id: crate::pollen::AssetId(aid),
+                                content_id: crate::storage::content_id::ContentId(cid),
+                                kind,
+                                declared_units: p.declared_units,
+                            })
+                        }
+                        None => None,
                     },
                 })
             }
@@ -2035,6 +2077,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             }),
             TransactionType::AiInferenceRequest(crate::ai::types::AiInferenceRequest {
                 request_id: crate::ai::types::AiRequestId([3u8; 32]),
@@ -2047,6 +2090,7 @@ mod tests {
                 submitted_at_block: 10,
                 deadline_block: 110,
                 effort: crate::lubot::effort::EffortTier::default(),
+                perception: None,
             }),
             TransactionType::AiInferenceResult(crate::ai::types::AiInferenceResult {
                 request_id: crate::ai::types::AiRequestId([3u8; 32]),
