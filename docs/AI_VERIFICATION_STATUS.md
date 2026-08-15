@@ -14,7 +14,43 @@ feature, while the code deliberately refuses to perform it.
 | Initial guest memory (weights, biases, input) bound by the AIR | working | `COL_MEM_INIT_ACC`, `initial_state_root` |
 | Weights bound outside the proof, by registry comparison | working | `AiModelSpec::execution_weights_digest` |
 | STARK verification of an inference proof on the transaction path | working | `src/execution/executor.rs` |
+| Perception declaration (what is read, in which modality, how much) enforced fail-closed at admission | working | `lubot::admit_inference_request`, `AiInferenceRequest::perception` (request-id V3) |
+| Model modality declaration checked against the read it is asked to serve | working | `AiModelSpec::modalities`, `ModalitySet` |
+| SocialFi bridge: finalized Lubot output minted as requester-owned NFT | working (best-effort) | `src/execution/executor.rs` → `lubot::social::lubot_output_to_nft` |
 | `VerifyInference` opcode (0x1F) inside the zkVM | **always returns 0** | `budzero/bud-vm/src/lib.rs` |
+
+## Perception declaration (V3)
+
+An inference request now carries what it intends to read: the Pollen asset,
+the B.U.D. content id, the modality (text/image/audio/video) and the declared
+size in that modality's unit (`src/lubot/perception.rs`). The declaration is
+inside the request id (`BDLM_AI_REQUEST_ID_V3`), so an operator cannot answer
+a different read than the one paid for. The executor admits a request only if
+all of the following hold (`admit_inference_request`):
+
+- the request carries a declaration (requests built before V3 are refused
+  fail-closed, including the contract-call path - deliberate behavior change);
+- the model declared the modality at registration (`AiModelSpec::modalities`; a
+  missing registration reads as `ModalitySet::none`, which refuses everything);
+- the declaration respects the per-modality ceilings;
+- when the `input_ref` is a Pollen data reference, it names the same asset as
+  the declaration (permission for A does not authorize reading B).
+
+## SocialFi bridge
+
+When an inference outcome finalizes, the executor mints the output bytes as a
+`lubot-ai` NFT owned by the requester (best-effort: a mint refusal - e.g. a
+duplicate content id - is logged, never a block rejection, because the outcome
+has already settled and the bridge is a product surface, not a consensus
+condition).
+
+The reverse direction runs through Pollen rather than a new read path: the
+same output is registered as a `DataAsset` (manifest = the NFT's content id,
+metadata commitment = the finalized output commitment). The owner can then
+grant and read their own output through the existing
+`AiDataInputRef` / `validate_ai_read_ref` path - closed-circuit without a new
+transaction type.
+
 
 ## STARK verification on the transaction path
 
@@ -235,3 +271,27 @@ default.
 Until all five are done, the honest claim is "AI layer with data-sovereign
 access control, a guest that really computes the forward pass, and structural
 proof checks", not "verifiable inference".
+
+## RPC / economics audit (2026-08-14, skill §10.5 pass)
+
+Every Lubot surface was checked against live code with call-site evidence:
+
+| Surface | Result | Evidence |
+|---|---|---|
+| Per-IP RPC rate limit | working | `rpc/server.rs` rate_limit_per_minute (default 120); rotating-source-aware |
+| Request input bound | working | `submit_request` enforces `spec.max_input_ref_bytes` |
+| Result output bound | working | `submit_result` enforces `spec.max_output_ref_bytes` |
+| Result deadline (dual) | working | `deadline_block` AND `result_deadline_blocks` both checked |
+| Zero-fee request spam | working | `max_fee >= 1` required |
+| Model registration spam | working | `ai_model_register_fee` (governance-tunable, exact-cost, atomic) |
+| Equivocation slash | working | executor → `slash_equivocator` (call site: executor.rs) |
+| Callback queue bound | working | `MAX_CALLBACK_EVENTS_PER_ADDRESS`, oldest-first eviction |
+| State growth | working | `run_ai_maintenance` wired at both block paths (prune_expired + expire_dispute_window, retention = DISPUTE_WINDOW_BLOCKS) |
+| Request cancel | working | `AiRequestCancel` executor branch; double-cancel prevented |
+| Agent payments | working | `AiAgentPayment`/`Release`/`Reclaim` executor branches |
+| Canonical input commitment | working | `admit_inference_request` (V3) |
+| Execution dims sanity | working | `AiModelSpec::validate` (2-32 layers, non-zero) |
+
+Open items (recorded, not silently closed): callback `consume_callback_events`
+drain has no production caller (queue is bounded; drain is an off-chain
+optimization - documented in `src/ai/registry.rs`).

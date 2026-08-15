@@ -68,5 +68,7 @@ backend = "pkcs11"
 governance = false
 zkvm_contracts = false
 pruning = false
-# F2 config-driven: VerifyMerkle gate (true = open via MainnetActivation::full(), false = closed)
-verify_merkle = true
+# F-13 / F-06: VerifyMerkle and VerifyInference stay closed until the AIR
+# can state an honest proof. A true value here must not open those opcodes.
+# The VM reads MainnetActivation::default(), not this flag.
+verify_merkle = false

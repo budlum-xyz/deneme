@@ -1,8 +1,4 @@
-<div align="center">
-
-# Budlum
-
-**The Universal Settlement Layer.**
+![Budlum](assets/budlum-banner.png)
 
 Budlum is a permissionless Layer-1 that does not compete with other chains, it *settles* them.
 PoW, PoS, PoA, BFT and ZK domains each keep their own consensus; Budlum verifies their
@@ -10,13 +6,11 @@ finality proofs and records cross-domain value transfer as a cryptographic fact 
 `GlobalBlockHeader`. Sovereignty over data, keys and computation stays with the participants.
 
 [![CI](https://github.com/budlum-xyz/budlum/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/budlum-xyz/budlum/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
-[![Tests](https://img.shields.io/badge/tests-2190%20lib-blue)](https://github.com/budlum-xyz/budlum/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
+[![Tests](https://img.shields.io/badge/tests-2222%20lib-blue)](https://github.com/budlum-xyz/budlum/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
 [![Rust](https://img.shields.io/badge/rust-1.97.0-orange?logo=rust)](rust-toolchain.toml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE.md)
+[![License](https://img.shields.io/badge/license-PolyForm%20Shield%201.0.0-blue)](LICENSE.md)
 
 [Architecture](ARCHITECTURE.md) · [Specification](SPECIFICATION.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Website](https://github.com/budlum-xyz/budlum.com)
-
-</div>
 
 ---
 
@@ -151,7 +145,7 @@ dependencies, so the entire system builds, tests and ships as one tree.
 | --- | --- | --- |
 | **BudZero** | [`budzero/`](budzero), [README](budzero/README.md) | ZK-native VM: deterministic ISA, gas-metered VM, compiler, and a Plonky3 STARK prover/verifier |
 | **B.U.D.** | [`src/storage/`](src/storage) | Broad Universal Database, data-sovereign storage with content addressing, deals and challenge/response proofs |
-| **Lubot** | [`src/lubot/`](src/lubot) | Closed-circuit AI layer: model registry, operator compute-bond, effort tiers, Pollen-gated data access |
+| **Lubot** | [`src/lubot/`](src/lubot) | Closed-circuit AI layer: model registry, operator compute-bond, effort tiers, Pollen-gated data access, perception declarations (V3), SocialFi output bridge. Off-chain workspace: [`lubot/`](lubot) |
 | **Pollen** | [`src/pollen/`](src/pollen) | Consent-gated data marketplace, grants, encryption, and the gate the AI layer must pass |
 | **BNS** | [`src/bns/`](src/bns) | `.bud` naming: registration, subdomains, content and storage records |
 | **Wallet Core** | [`wallet-core/`](wallet-core), [README](wallet-core/README.md) | BIP39 + SLIP-0010 Ed25519 derivation and transaction signing. A wallet, not a relayer |
@@ -201,7 +195,7 @@ cargo test --manifest-path budzero/Cargo.toml --workspace
 Before opening a pull request, run the same checks CI runs:
 
 ```bash
-bash scripts/pre-push-check.sh     # fmt + clippy + tests against the pinned toolchain
+cargo run --manifest-path xtask/tools/Cargo.toml -- pre-push   # fmt + clippy, pinned toolchain
 ```
 
 ### Build features
@@ -261,8 +255,9 @@ see [docs/VALIDATOR_ROLES.md](docs/VALIDATOR_ROLES.md).
 Metrics are exposed in Prometheus format (default `:9090`; scrape config in
 [`ops/prometheus.yml`](ops/prometheus.yml)). A systemd unit is provided at
 [`ops/budlum-core.service`](ops/budlum-core.service), and
-[`ops/backup_restore_drill.sh`](ops/backup_restore_drill.sh) exercises the snapshot
-backup/restore path end to end: run it before you need it.
+`cargo run --manifest-path xtask/tools/Cargo.toml -- backup-drill` exercises the
+snapshot backup/restore path end to end (set `SOURCE_DB` and `BACKUP_DIR`): run it
+before you need it.
 
 ---
 
@@ -418,7 +413,8 @@ bar for consensus and execution changes than for tooling, and explains why.
 
 The short version:
 
-1. Run `bash scripts/pre-push-check.sh` before pushing. Formatting is not guessed by hand.
+1. Run `cargo run --manifest-path xtask/tools/Cargo.toml -- pre-push` before pushing.
+   Formatting is not guessed by hand. `-- install-hook` wires it into `git push`.
 2. New behaviour arrives with a test that was observed to fail before the fix.
 3. If your change makes a CI gate red, the gate is the finding. Fix the cause, do not silence
    the signal.
@@ -427,4 +423,10 @@ The short version:
 
 ## License
 
-Licensed under the **Apache License 2.0**: see [LICENSE.md](LICENSE.md) and [NOTICE](NOTICE).
+Licensed under the **PolyForm Shield License 1.0.0**: see [LICENSE.md](LICENSE.md).
+
+PolyForm Shield permits any use **except providing a product that competes** with
+Budlum or with any product the licensor provides using it. Source remains readable,
+modifiable and redistributable; only competing products are excluded.
+
+> Required Notice: Copyright budlum-xyz (https://github.com/budlum-xyz)

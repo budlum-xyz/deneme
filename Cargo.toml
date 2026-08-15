@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.97.0"
 # : root cargo-deny `unlicensed = "deny"` kuralı kendi crate'imizi de
-# reddetmesin diye zorunlu. Repo kökündeki LICENSE.md (Apache-2.0) ile aynı.
-license = "Apache-2.0"
+# reddetmesin diye zorunlu. Repo kökündeki LICENSE.md (PolyForm Shield 1.0.0) ile aynı.
+license = "LicenseRef-PolyForm-Shield-1.0.0"
 
 [features]
 default = ["pq-dilithium"]

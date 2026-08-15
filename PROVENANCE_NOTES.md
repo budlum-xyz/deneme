@@ -39,8 +39,10 @@ The file layout is identical and several doc comments match verbatim
 degree calculations."). This is a fork with local modifications, not an
 independent implementation.
 
-- **Upstream licence:** `MIT OR Apache-2.0`, compatible with Budlum's
-  Apache-2.0 distribution, so there is no licence conflict.
+- **Upstream licence:** `MIT OR Apache-2.0`. Budlum now distributes under
+  PolyForm Shield 1.0.0. Taking the upstream MIT option keeps this compatible:
+  MIT permits redistribution under different terms provided the MIT notice is
+  retained, which `NOTICE` does. No licence conflict.
 - **Gap:** there is currently **no attribution anywhere in the tree**, no
   header, no `NOTICE`, no mention in the crate docs. Apache-2.0 §4 requires
   retaining attribution notices for derivative works. This should be fixed

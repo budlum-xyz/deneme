@@ -103,8 +103,13 @@ EXPOSE 4001 8545 8546 9090
 # Konteyner ayakta ama RPC yanıt vermiyorsa unhealthy işaretlenir.
 # JSON form (hadolint DL3025): `curl -f` zaten fail-mode'dur - başarısız
 # bağlantıda exit 1 döner, healthcheck'in healthy/unhealthy kararını verir.
+# F-20: JSON-RPC probe on the public listener the image actually binds
+# (8545). Compose's operator listener (8546) is opt-in via
+# --rpc-operator-listener; a default `docker run` never opens it, so a
+# probe there would mark a live rpc-role node unhealthy. A bare GET of
+# / is not a JSON-RPC request.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD ["curl", "-f", "http://localhost:8545/"]
+  CMD ["curl", "-sf", "--max-time", "4", "-H", "Content-Type: application/json", "-d", "{\"jsonrpc\":\"2.0\",\"method\":\"bud_netListening\",\"params\":[],\"id\":1}", "http://127.0.0.1:8545"]
 
 ENV RUST_LOG=info
 

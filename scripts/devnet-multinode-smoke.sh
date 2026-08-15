@@ -70,8 +70,16 @@ done
 echo "PASS [3/5]: liveness ($h1 -> $h2)"
 
 echo "== [4/5] /metrics endpoint =="
-body=$(curl -sf --max-time 5 "$METRICS") || fail "/metrics erişilemez (HTTP != 2xx)"
-[ -n "$body" ] || fail "/metrics boş gövde"
+# Retry döngüsü: metrics sunucusu tokio::spawn ile açılır; RPC hazır olduğunda
+# (adım 1) henüz dinliyor olmayabilir. Tek atışlık curl bu yarışta FAIL
+# üretiyordu (2026-08-14 gözlemi). Kapı zayıflamaz: metriklerin gerçekten
+# 2xx dönmesi ve gövdenin boş olmaması hâlâ şarttır; yalnızca beklenir.
+body=""
+for _ in $(seq 1 30); do
+  body=$(curl -sf --max-time 5 "$METRICS" 2>/dev/null) && break
+  sleep 2
+done
+[ -n "$body" ] || fail "/metrics erişilemez (30 deneme sonunda HTTP != 2xx)"
 echo "PASS [4/5]: /metrics 2xx ($(printf '%s' "$body" | wc -l) satır)"
 
 echo "== [5/5] operator RPC izolasyonu (8546 hosttan kapalı olmalı) =="

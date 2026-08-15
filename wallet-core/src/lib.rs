@@ -1123,6 +1123,16 @@ impl Wallet {
         }
 
         let outputs = privacy_transfer::build_outputs(&req)?;
+        // Strix HIGH (#370, yeni tur): giriş notunun BU cüzdana ait olduğu
+        // doğrulanmıyordu - başka cüzdanın recipient_tag'iyle not
+        // harcanabiliyordu (cross-wallet spending). Notun recipient tag'i
+        // bu cüzdanın adresinden türemiş olmalı.
+        let wallet_tag = crate::privacy_crypto::address_to_recipient_tag(&self.address());
+        if req.input.recipient_tag != wallet_tag {
+            return Err(WalletError::InvalidPrivateTransfer(
+                "input note recipient tag does not match this wallet's address".into(),
+            ));
+        }
         let nullifier_fe = req.input.nullifier();
         let nullifiers = vec![hash_from_field(nullifier_fe)];
         let output_commitments: Vec<[u8; 32]> = outputs
