@@ -324,6 +324,16 @@ impl MarketplaceRegistry {
         if grant.owner != asset.owner {
             return Err("AccessGrant owner must match DataAsset owner".into());
         }
+        // Strix HIGH (#358, deneme): owner imzasi kriptografik olarak
+        // dogrulanmadan grant kabul ediliyordu - sentinel olmayan her
+        // 64 bayt gecerli sayiliyordu. Artik imza, owner adresinin
+        // (ed25519 public key) gercek imzasi olmak zorunda.
+        crate::crypto::primitives::verify_signature(
+            &grant.signing_hash(),
+            grant.owner_signature.as_bytes(),
+            grant.owner.as_bytes(),
+        )
+        .map_err(|e| format!("AccessGrant owner signature invalid: {e}"))?;
         if self.access_grants.contains_key(&grant.grant_id) {
             return Err("AccessGrant already registered".into());
         }
@@ -380,6 +390,16 @@ impl MarketplaceRegistry {
         if authorization.seller != asset.owner {
             return Err("SaleAuthorization seller must match DataAsset owner".into());
         }
+        // Strix HIGH (#358, deneme): seller imzasi kriptografik olarak
+        // dogrulanmadan yetki kabul ediliyordu - saldirgan baskasinin
+        // asset'i icin sahte yetki uretebiliyordu. Artik imza, seller
+        // adresinin (ed25519 public key) gercek imzasi olmak zorunda.
+        crate::crypto::primitives::verify_signature(
+            &authorization.signing_hash(),
+            authorization.seller_signature.as_bytes(),
+            authorization.seller.as_bytes(),
+        )
+        .map_err(|e| format!("SaleAuthorization seller signature invalid: {e}"))?;
         if self
             .sale_authorizations
             .contains_key(&authorization.authorization_id)
@@ -454,10 +474,13 @@ impl MarketplaceRegistry {
             max_reads,
             authorization.terms_hash,
         );
-        // Authorization-backed grant: the seller-signed sale authorization is
-        // The bounded owner consent for this grant shape in this primitive
-        // Layer. Real cryptographic signature verification remains a future
-        // Wallet/transaction concern; sentinel signatures still fail closed.
+        // Authorization-backed grant: `create_sale_authorization` already
+        // verified the seller signature cryptographically (Strix #358), so a
+        // grant issued from a *registered* authorization carries verified
+        // owner consent. The owner_signature field is inherited from the
+        // verified authorization rather than re-signed over the grant's own
+        // preimage; the grant's admission authority is the verified
+        // authorization record, not the field itself.
         grant.owner_signature = authorization.seller_signature.clone();
         grant.validate_shape()?;
         if self.access_grants.contains_key(&grant.grant_id) {
@@ -712,8 +735,16 @@ mod tests {
     use super::*;
     use crate::pollen::AccessGrantStatus;
 
+    /// Deterministik test keypair'i: adres = public key, imza = bu keypair.
+    /// (Strix HIGH #358: imza artik kriptografik dogrulaniyor; testler
+    /// gercek ed25519 imzasi uretmek zorunda.)
+    fn test_keypair(byte: u8) -> crate::crypto::primitives::KeyPair {
+        crate::crypto::primitives::KeyPair::from_seed(&[byte; 32])
+            .expect("deterministic test keypair")
+    }
+
     fn addr(byte: u8) -> Address {
-        Address::from([byte; 32])
+        Address::from(test_keypair(byte).public_key_bytes())
     }
 
     fn signed_sale_authorization(asset: &DataAsset) -> SaleAuthorization {
@@ -733,7 +764,10 @@ mod tests {
             max_grants,
             [0xAA; 32],
         );
-        authorization.seller_signature = super::super::Signature64::from([0x44; 64]);
+        // Seller imzasi: asset.owner = addr(1) test keypair'i ile.
+        let signer = test_keypair(1);
+        authorization.seller_signature =
+            super::super::Signature64::from(signer.sign(&authorization.signing_hash()));
         authorization
     }
 
@@ -749,7 +783,10 @@ mod tests {
             max_reads,
             [8u8; 32],
         );
-        grant.owner_signature = super::super::Signature64::from([9u8; 64]);
+        // Owner imzasi: asset.owner = addr(1) test keypair'i ile.
+        let signer = test_keypair(1);
+        grant.owner_signature =
+            super::super::Signature64::from(signer.sign(&grant.signing_hash()));
         grant
     }
 

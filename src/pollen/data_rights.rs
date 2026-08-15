@@ -418,6 +418,24 @@ impl AccessGrant {
         AssetId(hasher.finalize().into())
     }
 
+    /// Signing hash for wallets. Deliberately excludes `owner_signature`,
+    /// `reads_used` and `status` (mutable consumption/state fields).
+    pub fn signing_hash(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"BDLM_POLLEN_ACCESS_GRANT_SIGNING_V1");
+        hasher.update(self.grant_id.0);
+        hasher.update(self.asset_id.0);
+        hasher.update(self.owner.as_bytes());
+        hasher.update(self.grantee.as_bytes());
+        hasher.update(self.payer.as_bytes());
+        hasher.update(self.price_paid.to_le_bytes());
+        hasher.update(self.issued_at_block.to_le_bytes());
+        hasher.update(self.expires_at_block.to_le_bytes());
+        hasher.update(self.max_reads.to_le_bytes());
+        hasher.update(self.purpose_hash);
+        hasher.finalize().into()
+    }
+
     pub fn validate_shape(&self) -> Result<(), String> {
         if self.grant_id == GrantId::zero() {
             return Err("AccessGrant grant_id cannot be zero".into());
