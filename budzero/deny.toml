@@ -20,6 +20,8 @@ allow = [
     # Kökle aynı gerekçe: bud-node → libp2p → idna_adapter zinciri icu_*
     # crate'lerini getirir; Unicode-3.0 OSI-onaylı permissive lisanstır.
     "Unicode-3.0",
+    # PolyForm Shield 1.0.0: kök repoyla aynı - workspace üyesi lisansı.
+    "LicenseRef-PolyForm-Shield-1.0.0",
 ]
 confidence-threshold = 0.8
 

@@ -352,14 +352,20 @@ impl Codegen {
                 // Know where the body starts. Using `Option<usize>`
                 // Keeps the wildcard and integer-pattern cases
                 // Symmetric without an extra struct field.
-                let mut arm_body_placeholder: Option<usize>;
+                let mut pending_skip: Option<usize> = None;
                 let mut end_jump_indices: Vec<usize> = Vec::new();
 
+                // Strix HIGH (#367, yeni tur): Jnz hedefi arm GÖVDESİNE
+                // patchleniyordu - yani "eşit değilse" de gövde çalışıyordu
+                // (ilk tamsayı kolu scrutinee'ye bakmadan yürür). Doğrusu:
+                // başarısızlık atlaması SONRAKİ arm'ın testine gider; son
+                // arm'ınki match sonuna.
                 for arm in arms {
-                    // Emit the test or unconditional jump. Whichever
-                    // Path we take, the next instruction is the start
-                    // Of this arm's body - the placeholder is patched
-                    // Right after we know the body's first PC.
+                    let test_start = self.instructions.len();
+                    // Önceki arm'ın başarısızlık atlaması bu arm'ın testine.
+                    if let Some(prev) = pending_skip.take() {
+                        self.patch_jump(prev, (test_start as i32) - (prev as i32));
+                    }
                     match &arm.pattern {
                         MatchPattern::IntLit(val) => {
                             let pat_reg = self.alloc_reg();
@@ -368,30 +374,30 @@ impl Codegen {
                             self.emit(Opcode::Sub, diff_reg, scrutinee_reg, pat_reg, 0);
                             let placeholder = self.instructions.len();
                             self.emit(Opcode::Jnz, 0, diff_reg, 0, 0);
-                            arm_body_placeholder = Some(placeholder);
+                            // Hedef henüz bilinmiyor (sonraki arm'ın testi).
+                            pending_skip = Some(placeholder);
                             self.next_reg = saved_reg;
                         }
                         MatchPattern::Wildcard => {
-                            let placeholder = self.instructions.len();
-                            self.emit(Opcode::Jmp, 0, 0, 0, 0);
-                            arm_body_placeholder = Some(placeholder);
+                            // Test yok: önceki arm'lar tutmadıysa doğal
+                            // düşüşle buraya gelinir; pending_skip zaten
+                            // yukarıda bu test_start'a patch edildi.
                         }
                     }
 
                     // Body of this arm.
-                    let body_start = self.instructions.len();
                     for s in &arm.body {
                         self.generate_stmt(s, scope, storage);
-                    }
-                    // Patch the test/wildcard placeholder to land here.
-                    if let Some(placeholder) = arm_body_placeholder.take() {
-                        self.patch_jump(placeholder, (body_start as i32) - (placeholder as i32));
                     }
                     // After the body, jump to the end of the match.
                     let end_jump = self.instructions.len();
                     self.emit(Opcode::Jmp, 0, 0, 0, 0);
                     end_jump_indices.push(end_jump);
                     self.next_reg = saved_reg;
+                }
+                // Son arm'ın başarısızlık atlaması da match sonuna gider.
+                if let Some(last) = pending_skip.take() {
+                    end_jump_indices.push(last);
                 }
 
                 // Patch every arm's end-jump to the instruction after

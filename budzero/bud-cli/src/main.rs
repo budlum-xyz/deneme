@@ -188,19 +188,14 @@ fn run_pipeline(config: ExecutionConfig) -> Result<ExecutionOutput, Box<dyn std:
     let mut vm = Vm::new(bud_compiler::MIN_VM_MEMORY_BYTES);
     if let Some(s) = config.sender {
         vm.context.sender = s;
-        let acc = match state.get_account(s) {
-            Some(a) => a,
-            None => {
-                let default_acc = bud_state::Account {
-                    balance: 1000,
-                    nonce: 0,
-                    code_hash: [0u8; 32],
-                    storage_root: [0u8; 32],
-                };
-                state.set_account(s, default_acc.clone());
-                default_acc
-            }
-        };
+        // Strix MEDIUM (#367, deneme): kayitli olmayan bir sender icin
+        // otomatik fonlu hesap olusturmak, calistiricinin kontrol ettigi
+        // sender degerini ag yapisina yansitir ve "sahip olunmayan"
+        // hesaptan islem basilmis gibi davranir. Fail-closed: sender
+        // state'te yoksa islem reddedilir.
+        let acc = state.get_account(s).ok_or_else(|| {
+            format!("sender account {s} does not exist in {state_file}; refusing to fund a new account implicitly")
+        })?;
         vm.context.nonce = acc.nonce;
     }
     if let Some(n) = config.nonce {

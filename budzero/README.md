@@ -129,7 +129,7 @@ jobs in one commit.
 
 ## License
 
-Apache-2.0, see [LICENSE.md](../LICENSE.md).
+PolyForm Shield 1.0.0, see [LICENSE.md](../LICENSE.md).
 
 ## See also
 

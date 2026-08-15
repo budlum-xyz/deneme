@@ -12,7 +12,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-license = "Apache-2.0"
+license = "LicenseRef-PolyForm-Shield-1.0.0"
 
 # budzero is a separate workspace, so it does not inherit the root manifest's
 # profile and would otherwise wrap arithmetic silently in release builds.
