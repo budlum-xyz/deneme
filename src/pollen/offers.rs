@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use super::{
     AccessGrant, AiDataInputRef, AssetId, DataAsset, DataAssetStatus, EncryptionPolicy, GrantId,
-    SaleAuthorization, SaleAuthorizationId,
+    SaleAuthorization, SaleAuthorizationId, Signature64,
 };
 
 /// AI Data Marketplace - Economic layer for user-to-AI data sales.
@@ -235,6 +235,43 @@ impl MarketplaceRegistry {
         Self::default()
     }
 
+    /// Satin alma isteginin kanonik imza preimage'i.
+    ///
+    /// Strix HIGH (#358, 2. denetim): buyer imzasi, satin alma
+    /// parametrelerinin TAMAMINA baglanir (authorization, fiyat, sure,
+    /// max_reads, payment_commitment, expiry). Boylece buyer neyi
+    /// kabul ettigini imzalamis olur; saldirgan baskasinin adina veya
+    /// degistirilmis sartlarla grant uretemez.
+    pub fn purchase_signing_hash(
+        authorization: &SaleAuthorization,
+        buyer: Address,
+        grantee: Address,
+        current_block: u64,
+        grant_duration_blocks: u64,
+        max_reads: u32,
+        payment_commitment: [u8; 32],
+    ) -> Result<[u8; 32], String> {
+        let grant_expires_at_block = current_block
+            .checked_add(grant_duration_blocks)
+            .ok_or("Pollen purchase grant expiry overflow")?;
+        if grant_expires_at_block > authorization.expires_at_block {
+            return Err("Pollen purchase grant expiry exceeds SaleAuthorization expiry".into());
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(b"BDLM_POLLEN_PURCHASE_V1");
+        hasher.update(authorization.authorization_id.0);
+        hasher.update(authorization.asset_id.0);
+        hasher.update(authorization.seller.as_bytes());
+        hasher.update(buyer.as_bytes());
+        hasher.update(grantee.as_bytes());
+        hasher.update(authorization.unit_price.to_le_bytes());
+        hasher.update(grant_duration_blocks.to_le_bytes());
+        hasher.update(max_reads.to_le_bytes());
+        hasher.update(payment_commitment);
+        hasher.update(grant_expires_at_block.to_le_bytes());
+        Ok(hasher.finalize().into())
+    }
+
     pub fn create_offer(
         &mut self,
         seller: Address,
@@ -421,6 +458,7 @@ impl MarketplaceRegistry {
         grant_duration_blocks: u64,
         max_reads: u32,
         payment_commitment: [u8; 32],
+        buyer_signature: Signature64,
     ) -> Result<(GrantId, PollenPurchaseReceipt), String> {
         if buyer == Address::zero() || grantee == Address::zero() {
             return Err("Pollen purchase buyer/grantee cannot be zero".into());
@@ -433,6 +471,9 @@ impl MarketplaceRegistry {
         }
         if payment_commitment == [0u8; 32] {
             return Err("Pollen purchase payment_commitment cannot be zero".into());
+        }
+        if buyer_signature.is_sentinel() {
+            return Err("Pollen purchase buyer_signature sentinel is invalid".into());
         }
 
         let authorization = self
@@ -455,6 +496,26 @@ impl MarketplaceRegistry {
         if asset.owner != authorization.seller {
             return Err("SaleAuthorization seller must match DataAsset owner".into());
         }
+
+        // Strix HIGH (#358, 2. denetim): buyer imzasi, satin alma
+        // parametrelerinin tamamina baglanmis olarak dogrulanmadan grant
+        // verilmez. Cagiran taraf, buyer adresinin (ed25519 public key)
+        // gercek imzasini sunmak zorundadir.
+        let preimage = Self::purchase_signing_hash(
+            &authorization,
+            buyer,
+            grantee,
+            current_block,
+            grant_duration_blocks,
+            max_reads,
+            payment_commitment,
+        )?;
+        crate::crypto::primitives::verify_signature(
+            &preimage,
+            buyer_signature.as_bytes(),
+            buyer.as_bytes(),
+        )
+        .map_err(|e| format!("Pollen purchase buyer signature invalid: {e}"))?;
 
         let grant_expires_at_block = current_block
             .checked_add(grant_duration_blocks)
@@ -790,6 +851,35 @@ mod tests {
         grant
     }
 
+    /// Satin alma istegi icin buyer imzasi (Strix #358, 2. denetim).
+    /// `buyer_byte`, buyer adresini ureten test keypair'inin byte'idir.
+    fn signed_purchase(
+        registry: &MarketplaceRegistry,
+        authorization_id: SaleAuthorizationId,
+        buyer: Address,
+        grantee: Address,
+        current_block: u64,
+        grant_duration_blocks: u64,
+        max_reads: u32,
+        payment_commitment: [u8; 32],
+        buyer_byte: u8,
+    ) -> Signature64 {
+        let auth = registry
+            .get_sale_authorization(&authorization_id)
+            .expect("authorization must exist for signed purchase");
+        let preimage = MarketplaceRegistry::purchase_signing_hash(
+            auth,
+            buyer,
+            grantee,
+            current_block,
+            grant_duration_blocks,
+            max_reads,
+            payment_commitment,
+        )
+        .expect("preimage must be computable");
+        Signature64::from(test_keypair(buyer_byte).sign(&preimage))
+    }
+
     #[test]
     fn root_changes_when_data_asset_or_grant_changes() {
         let mut registry = MarketplaceRegistry::new();
@@ -912,15 +1002,28 @@ mod tests {
             .unwrap();
         let root_before = registry.root();
 
+        let buyer = addr(2);
+        let buyer_sig = signed_purchase(
+            &registry,
+            authorization_id,
+            buyer,
+            buyer,
+            10,
+            5,
+            2,
+            [0x99; 32],
+            2,
+        );
         let (grant_id, receipt) = registry
             .issue_grant_from_sale_authorization(
                 authorization_id,
-                addr(2),
-                addr(2),
+                buyer,
+                buyer,
                 10,
                 5,
                 2,
                 [0x99; 32],
+                buyer_sig,
             )
             .unwrap();
 
@@ -957,26 +1060,52 @@ mod tests {
         let authorization_id = registry
             .create_sale_authorization(signed_sale_authorization_with_limit(&asset, 1))
             .unwrap();
+        let buyer2 = addr(2);
+        let buyer2_sig = signed_purchase(
+            &registry,
+            authorization_id,
+            buyer2,
+            buyer2,
+            10,
+            5,
+            1,
+            [0x91; 32],
+            2,
+        );
         registry
             .issue_grant_from_sale_authorization(
                 authorization_id,
-                addr(2),
-                addr(2),
+                buyer2,
+                buyer2,
                 10,
                 5,
                 1,
                 [0x91; 32],
+                buyer2_sig,
             )
             .unwrap();
+        let buyer3 = addr(3);
+        let buyer3_sig = signed_purchase(
+            &registry,
+            authorization_id,
+            buyer3,
+            buyer3,
+            11,
+            5,
+            1,
+            [0x92; 32],
+            3,
+        );
         let err = registry
             .issue_grant_from_sale_authorization(
                 authorization_id,
-                addr(3),
-                addr(3),
+                buyer3,
+                buyer3,
                 11,
                 5,
                 1,
                 [0x92; 32],
+                buyer3_sig,
             )
             .unwrap_err();
         assert!(err.contains("grant limit exhausted"));
@@ -991,28 +1120,53 @@ mod tests {
             .create_sale_authorization(signed_sale_authorization(&asset))
             .unwrap();
 
+        let buyer = addr(2);
+        let buyer_sig_zero = signed_purchase(
+            &registry,
+            authorization_id,
+            buyer,
+            buyer,
+            10,
+            5,
+            1,
+            [0u8; 32],
+            2,
+        );
         let err = registry
             .issue_grant_from_sale_authorization(
                 authorization_id,
-                addr(2),
-                addr(2),
+                buyer,
+                buyer,
                 10,
                 5,
                 1,
                 [0u8; 32],
+                buyer_sig_zero,
             )
             .unwrap_err();
         assert!(err.contains("payment_commitment"));
 
+        let buyer_sig_expiry = signed_purchase(
+            &registry,
+            authorization_id,
+            buyer,
+            buyer,
+            10,
+            11,
+            1,
+            [0x93; 32],
+            2,
+        );
         let err = registry
             .issue_grant_from_sale_authorization(
                 authorization_id,
-                addr(2),
-                addr(2),
+                buyer,
+                buyer,
                 10,
                 11,
                 1,
                 [0x93; 32],
+                buyer_sig_expiry,
             )
             .unwrap_err();
         assert!(err.contains("exceeds SaleAuthorization expiry"));
