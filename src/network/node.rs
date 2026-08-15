@@ -1455,6 +1455,16 @@ impl Node {
                                SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                                    let remote = endpoint.get_remote_address();
                                    let subnet = ipv4_slash24(remote);
+                                   // Strix HIGH (#362, 3. denetim): yasakli
+                                   // peer yeniden baglanip /sync isteklerine
+                                   // devam edebiliyordu (handshaked bayragi
+                                   // kopukluklarda yasiyor). Baglanti kabulunde
+                                   // ban durumu once kontrol edilir.
+                                   if self.peer_manager_lock().is_banned(&peer_id) {
+                                       warn!("Rejecting banned peer {} on reconnect", peer_id);
+                                       let _ = self.swarm.disconnect_peer_id(peer_id);
+                                       continue;
+                                   }
                                    // H5.1 eclipse bound before admitting.
                                    // Through the recovering helper, not a raw
                                    // `lock()`. A poisoned mutex made this
@@ -2527,10 +2537,15 @@ impl Node {
                                                request_response::Message::Request { request, channel, .. } => {
                                                    let request_allowed = {
                                                        let mut pm = self.peer_manager_lock();
-                                                       pm.is_handshaked(&peer) && pm.check_rate_limit(&peer)
+                                                       // Strix HIGH (#362, 3. denetim): yasakli peer
+                                                       // /sync istegi yapamaz; ban durumu handshake +
+                                                       // rate-limit ile birlikte kontrol edilir.
+                                                       !pm.is_banned(&peer)
+                                                           && pm.is_handshaked(&peer)
+                                                           && pm.check_rate_limit(&peer)
                                                    };
                                                    if !request_allowed {
-                                                       warn!("Rejected sync request from unhandshaked/rate-limited peer {peer}");
+                                                       warn!("Rejected sync request from unhandshaked/rate-limited/banned peer {peer}");
                                                        continue;
                                                    }
                                                    if let Ok(msg) = NetworkMessage::from_bytes_validated(&request) {
