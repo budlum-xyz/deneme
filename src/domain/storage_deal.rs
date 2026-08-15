@@ -711,6 +711,13 @@ pub enum StorageError {
         deal_id: u64,
         max: usize,
     },
+    /// F-18: too many concurrent open challenges across every manifest
+    /// of one operator. The (operator, manifest) interval alone lets an
+    /// attacker scale I/O with the number of manifests.
+    TooManyOpenChallengesPerOperator {
+        operator: Address,
+        max: usize,
+    },
     /// A recently challenged operator/manifest pair cannot be challenged again
     /// Until the canonical epoch shown here. This prevents cheap repeated
     /// Retrieval probes that let an operator retain only the last requested
@@ -837,6 +844,12 @@ impl std::fmt::Display for StorageError {
             }
             Self::TooManyOpenChallenges { deal_id, max } => {
                 write!(f, "too many open challenges for deal {deal_id} (max {max})")
+            }
+            Self::TooManyOpenChallengesPerOperator { operator, max } => {
+                write!(
+                    f,
+                    "too many open challenges for operator {operator} (max {max})"
+                )
             }
             Self::ChallengeRateLimited {
                 operator,
@@ -1061,14 +1074,9 @@ impl StorageRegistry {
     /// Claiming `AlwaysOn` to reach a primary replica means accepting a
     /// primary's obligations, and the bond answers for them.
     ///
-    /// No production path calls this yet, so today every operator is
-    /// `AlwaysOn` and the primary rule refuses nobody. The rule itself is
-    /// live in `open_deal`; what is missing is the way an operator says it is
-    /// a phone. That needs a signed transaction, because otherwise anyone
-    /// could reclassify anyone else and lock them out of primary replicas,
-    /// and a signed transaction type is its own change. Recorded here rather
-    /// than left for a reader to discover: the enforcement is real and the
-    /// declaration is not there yet.
+    /// F-17: `ChainHandle::set_storage_operator_class` is the production
+    /// declaration path. The class is still self-reported; `open_deal`
+    /// holds the operator to whatever it claimed.
     pub fn set_operator_class(&mut self, operator: Address, class: OperatorClass) {
         self.operator_classes.insert(operator, class);
     }
@@ -1286,6 +1294,17 @@ impl StorageRegistry {
     /// Floor applied on top of `OPENER_BOND_PER_KIB` so sub-KiB ranges are
     /// not free.
     pub const MIN_OPENER_BOND: u64 = 1;
+
+    /// F-18: concurrent open challenges across every manifest of one
+    /// operator. The (operator, manifest) interval alone lets an attacker
+    /// scale I/O with the number of manifests the operator holds.
+    pub const MAX_OPEN_CHALLENGES_PER_OPERATOR: usize = 16;
+
+    /// F-19: mainnet floor above the uncalibrated 1-unit-per-`KiB` rate.
+    /// `required_opener_bond` for 16 `MiB` is 16_384; this floor dominates it.
+    /// Storage economics stay disabled on mainnet today; the constant is
+    /// the policy the actor will apply the day that gate opens.
+    pub const MAINNET_MIN_OPENER_BOND: u64 = 1_000_000;
 
     /// Bond required to challenge `range_len` bytes.
     ///
@@ -1613,6 +1632,24 @@ impl StorageRegistry {
             return Err(StorageError::TooManyOpenChallenges {
                 deal_id,
                 max: Self::MAX_OPEN_CHALLENGES_PER_DEAL,
+            });
+        }
+
+        let operator_open = self
+            .challenges
+            .values()
+            .filter(|c| {
+                !self.results.contains_key(&c.challenge_id)
+                    && self
+                        .deals
+                        .get(&c.deal_id)
+                        .is_some_and(|d| d.operator == operator)
+            })
+            .count();
+        if operator_open >= Self::MAX_OPEN_CHALLENGES_PER_OPERATOR {
+            return Err(StorageError::TooManyOpenChallengesPerOperator {
+                operator,
+                max: Self::MAX_OPEN_CHALLENGES_PER_OPERATOR,
             });
         }
 

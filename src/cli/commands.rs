@@ -396,7 +396,7 @@ impl Default for NodeConfig {
             features_governance: false,
             features_zkvm_contracts: false,
             features_pruning: false,
-            features_verify_merkle: true,
+            features_verify_merkle: false,
             storage_enabled: true,
             storage_replication_factor: 3,
             storage_mandatory_sharding: true,
@@ -1193,6 +1193,32 @@ impl NodeConfig {
 
             if self.features_governance || self.features_zkvm_contracts || self.features_pruning {
                 eprintln!("CRITICAL SECURITY FAILURE: governance, zkvm_contracts and pruning must remain disabled for Mainnet v1.");
+                std::process::exit(1);
+            }
+
+            // F-01: a non-empty bootnode list that still names the ceremony
+            // template (RFC 5737 / "placeholder") is not a launch config.
+            if let Some(bad) = crate::core::chain_config::first_placeholder_peer(&self.bootnodes) {
+                eprintln!(
+                    "CRITICAL SECURITY FAILURE: mainnet bootnode is still a ceremony placeholder: {bad}"
+                );
+                std::process::exit(1);
+            }
+            if let Some(bad) = crate::core::chain_config::first_placeholder_peer(&self.dns_seeds) {
+                eprintln!(
+                    "CRITICAL SECURITY FAILURE: mainnet DNS seed is still a ceremony placeholder: {bad}"
+                );
+                std::process::exit(1);
+            }
+
+            // F-13: the checked-in mainnet profile must not advertise an open
+            // VerifyMerkle gate. The VM ignores this flag today; refusing it
+            // here keeps a future wiring from silently enabling an unfinished
+            // verifier.
+            if self.features_verify_merkle {
+                eprintln!(
+                    "CRITICAL SECURITY FAILURE: VerifyMerkle cannot be enabled on mainnet until storage challenge proofs are checkable"
+                );
                 std::process::exit(1);
             }
         }
