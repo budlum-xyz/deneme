@@ -448,8 +448,15 @@ impl Executor {
                         submitted_at_block: state.current_block_height,
                         deadline_block,
                         effort: crate::lubot::effort::EffortTier::default(),
+                        perception: None,
                     };
                     req.request_id = req.calculate_id();
+                    // Kapalı-devre okuma beyanı (V3): kontrat yolu da aynı
+                    // kapıdan geçer. Beyan taşımayan eski kontrat çağrıları
+                    // fail-closed reddedilir - ne okuduğunu söylemeyen bir
+                    // istek, metin modele görüntü vermenin yoludur.
+                    crate::lubot::admit_inference_request(&state.ai_registry, &req)
+                        .map_err(|e| BudlumError::validation("ai_perception_rejected", e))?;
                     let current_block = state.current_block_height;
                     let pollen_grant = state
                         .marketplace
@@ -1146,13 +1153,39 @@ impl Executor {
                 if spec.owner != tx.from {
                     spec.owner = tx.from;
                 }
+                // Anti-sybil kayıt ücreti (yönetişimle ayarlanabilir,
+                // RegistryParams::ai_model_register_fee). Exact-cost: azı
+                // reddedilir; tamamı ücret üstüne eklenir. Tier 2 kararı
+                // (kullanıcı 2026-08-14): ekonomik parametre, yönetişimce
+                // ayarlanabilir - sabit kodlanmaz.
+                let reg_fee = state.registry.params().ai_model_register_fee;
+                if reg_fee > 0 && tx.amount < reg_fee {
+                    return Err(BudlumError::validation(
+                        "ai_model_register_fee_insufficient",
+                        format!(
+                            "AI model registration requires amount >= {reg_fee} (governance-tunable)"
+                        ),
+                    ));
+                }
                 state
                     .ai_registry
                     .register_model(spec)
                     .map_err(|e| BudlumError::validation("ai_model_registration_failed", e))?;
                 let sender = state.get_or_create(&tx.from);
-                sender.balance = sender.balance.checked_sub(tx.fee).ok_or_else(|| {
-                    BudlumError::validation("balance_underflow", "balance underflow")
+                let total = tx.fee.checked_add(reg_fee).ok_or_else(|| {
+                    BudlumError::validation("cost_overflow", "AI register cost overflow")
+                })?;
+                if sender.balance < total {
+                    return Err(BudlumError::validation(
+                        "insufficient_funds",
+                        format!(
+                            "AI registration requires {total}, balance: {}",
+                            sender.balance
+                        ),
+                    ));
+                }
+                sender.balance = sender.balance.checked_sub(total).ok_or_else(|| {
+                    BudlumError::validation("balance_underflow", "AI fee underflow")
                 })?;
                 sender.nonce = sender.nonce.saturating_add(1);
             }
@@ -1162,8 +1195,12 @@ impl Executor {
                     req.requester = tx.from;
                 }
                 {
-                    let sender = state.get_or_create(&tx.from);
-                    if sender.balance
+                    // Strix MEDIUM (#356, yeni tur): doğrudan AI çıkarım yolu
+                    // vesting spendable kapısını atlıyordu. Escrow bir harcamadır;
+                    // vesting kilitli bakiye escrow'a giremez (LubotOperatorBond
+                    // ile aynı kapı).
+                    let sender_balance = state.spendable_balance(&tx.from);
+                    if sender_balance
                         < req.max_fee.checked_add(tx.fee).ok_or_else(|| {
                             BudlumError::validation("cost_overflow", "AI cost overflow")
                         })?
@@ -1176,6 +1213,10 @@ impl Executor {
                 }
                 // Executor-layer deadline enforcement (defense-in-depth):
                 let current_block = state.current_block_height;
+                // Kapalı-devre okuma beyanı (V3): beyansız istekler
+                // fail-closed reddedilir (bkz. lubot::admit_inference_request).
+                crate::lubot::admit_inference_request(&state.ai_registry, &req)
+                    .map_err(|e| BudlumError::validation("ai_perception_rejected", e))?;
                 let pollen_grant = state
                     .marketplace
                     .validate_ai_read_ref(req.input_ref.as_slice(), &tx.from, current_block)
@@ -1190,20 +1231,26 @@ impl Executor {
                         .consume_ai_read_grant(&grant_id, &tx.from, current_block)
                         .map_err(|e| BudlumError::validation("ai_data_access_denied", e))?;
                 }
-                let sender = state.get_or_create(&tx.from);
-                // Balance check before deduction
+                // Balance check before deduction (spendable: vesting kapısı -
+                // Strix #356; kesinti harcanabilir kısımdan yapılır, kilit
+                // bozulmaz çünkü ilk kapı spendable'ı zaten doğrulamıştır).
+                // Spendable, `get_or_create`'nin mutable ödüncünden ÖNCE
+                // okunur (E0502): hesap yoksa spendable 0'dır, yaratılsa da
+                // 0'dır - sıra değişimi davranışı değiştirmez.
                 let ai_total = tx.fee.checked_add(req.max_fee).ok_or_else(|| {
                     BudlumError::validation("cost_overflow", "AI total cost overflow")
                 })?;
-                if sender.balance < ai_total {
+                let spendable = state.spendable_balance(&tx.from);
+                if spendable < ai_total {
                     return Err(BudlumError::validation(
                         "insufficient_funds",
                         format!(
-                            "AI inference requires {}, balance: {}",
-                            ai_total, sender.balance
+                            "AI inference requires {}, spendable: {}",
+                            ai_total, spendable
                         ),
                     ));
                 }
+                let sender = state.get_or_create(&tx.from);
                 sender.balance = sender
                     .balance
                     .checked_sub(tx.fee)
@@ -1261,6 +1308,10 @@ impl Executor {
                 if let Some(finalized) = outcome {
                     let req = state.ai_registry.requests.get(&finalized.request_id);
                     if let Some(req) = req {
+                        // `req` borrow'u burada biter; köprü, kopyalanan
+                        // `requester` ve yerel `res` üzerinden çalışır - ödül
+                        // döngüsünün mutable `state` erişimiyle çakışmaz.
+                        let requester = req.requester;
                         if !finalized.agreeing_verifiers.is_empty() {
                             // Integer division remainder protection.
                             // Max_fee / verifier_count loses the remainder.
@@ -1283,6 +1334,44 @@ impl Executor {
                                     )
                                 })?;
                             }
+                        }
+                        // SocialFi köprüsü (best-effort): kesinleşmiş Lubot
+                        // çıktısı, istek sahibine "lubot-ai" NFT'si olarak
+                        // basılır. Hata blok reddi DEĞİLDİR - çıkarım sonucu
+                        // zaten kesinleşmiştir; köprü ürün yüzeyidir, consensus
+                        // koşulu değil. Duplicate ContentId (aynı çıktı iki
+                        // istekte) yalnızca loglanır.
+                        // Tier 1 çünkü NFT hattının blok reddetmesi,
+                        // kesinleşmiş bir çıkarım sonucunu geri alırdı.
+                        let output_bytes = res.output_ref.as_slice().to_vec();
+                        let content_id = crate::storage::content_id::ContentId::of(&output_bytes);
+                        if let Err(e) = crate::lubot::social::lubot_output_to_nft(
+                            &mut state.nft_registry,
+                            requester,
+                            &output_bytes,
+                            state.epoch_index,
+                        ) {
+                            tracing::warn!(%e, "lubot output NFT mint skipped (best-effort)");
+                        }
+                        // Pollen köprüsü (ters yön, aynı best-effort bloğu):
+                        // çıktı aynı zamanda DataAsset olarak kaydedilir -
+                        // manifest_id = NFT'nin ContentId'si, metadata
+                        // commitment = kesinleşmiş çıktı commitment'i. Böylece
+                        // NFT sahibi (istek sahibi) kendi çıktısını Pollen
+                        // grant mekanizması üzerinden yeniden okuyabilir;
+                        // kapalı-devre yeni bir yol açılmaz, mevcut
+                        // AiDataInputRef + validate_ai_read_ref yolu kullanılır.
+                        let asset = crate::pollen::data_rights::DataAsset::new(
+                            requester,
+                            content_id,
+                            res.output_commitment,
+                            false,
+                        );
+                        if let Err(e) = state.marketplace.register_data_asset(asset) {
+                            tracing::warn!(
+                                %e,
+                                "lubot output DataAsset registration skipped (best-effort)"
+                            );
                         }
                     }
                 }
