@@ -96,6 +96,21 @@ probleme = "probleme"
 Sur = "Sur"
 lik = "lik"
 foto = "foto"
+# ── budscan turunda eklenenler (PR #177) ────────────────────────────────
+# Üçü de Türkçe kelime; typos'un İngilizce sözlüğü bunları sırasıyla
+# "admin", "offset" ve "vector" sanıyor. Mutasyonla doğrulandı: bu satırlar
+# kaldırılınca kapı 7 bulguyla kırmızıya döner, yani kalibrasyon boş değil.
+#   adin   : "ad" isminin ilgi hâli (bir adın çözümü), "admin" değil
+#   ofset  : Arweave `note` alanının 32 baytlık big-endian kaydırması
+#   vektor : content-id eşitlik testinin paylaşılan test vektörü
+adin = "adin"
+Adin = "Adin"
+ofset = "ofset"
+Ofset = "Ofset"
+vektor = "vektor"
+vektoru = "vektoru"
+Vektor = "Vektor"
+
 # ── Özel adlar / teknik terimler ────────────────────────────────────────
 Canva = "Canva"     # ürün adı (Canvas değil)
 Groth = "Groth"     # Groth16 zk-SNARK şeması (Jens Groth)

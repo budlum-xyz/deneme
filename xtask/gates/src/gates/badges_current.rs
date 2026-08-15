@@ -96,40 +96,68 @@ fn check_rust_badge(root: &Path, readme: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Percent-decodes a shields.io badge label (`%20` -> space, `%2D` -> '-').
+fn url_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hi = hex_val(b[i + 1]);
+            let lo = hex_val(b[i + 2]);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push(hi * 16 + lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_val(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn check_license_badge(root: &Path, readme: &str) -> Result<(), String> {
     let manifest = read_file(root, "Cargo.toml")?;
     let badge = readme
         .split("badge/license-")
         .nth(1)
         .and_then(|r| {
-            // Stop at the "-blue" suffix; the badge name itself may contain
-            // '-', so take everything before the first "-blue" marker.
             let head = r.split("-blue").next().unwrap_or(r);
-            let name: String = head
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '+' || *c == '-')
-                .collect();
-            if name.is_empty() {
+            let decoded = url_decode(head);
+            if decoded.is_empty() {
                 None
             } else {
-                Some(name)
+                Some(decoded)
             }
         })
         .ok_or_else(|| String::from("no license badge found in README.md"))?;
-    // The badge encodes '-' as '--'; decode: "--" -> "-".
-    let badge_decoded = badge
-        .replace("--", "@@")
-        .replace('-', " ")
-        .replace("@@", "-");
+    // shields.io encodes '-' as '--' and a space as %20; the badge shows the
+    // human-readable license name. Normalize it to hyphens so it lines up with
+    // Cargo.toml, whose `LicenseRef-` prefix we drop below.
+    let badge_canon = badge.replace("--", "-").replace(' ', "-");
     let declared = manifest
         .lines()
         .find(|l| l.trim_start().starts_with("license"))
         .and_then(|l| l.split('=').nth(1))
         .map(|v| v.trim().trim_matches('"').to_string())
         .ok_or_else(|| String::from("Cargo.toml declares no license - gate would be vacuous"))?;
-    if badge_decoded != declared {
+    let declared_canon = declared
+        .strip_prefix("LicenseRef-")
+        .unwrap_or(&declared)
+        .to_string();
+    if badge_canon != declared_canon {
         return Err(format!(
-            "README license badge says '{badge_decoded}', Cargo.toml declares '{declared}'"
+            "README license badge says '{badge_canon}', Cargo.toml declares '{declared_canon}'"
         ));
     }
     let link = readme

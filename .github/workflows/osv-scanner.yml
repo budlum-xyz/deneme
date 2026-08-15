@@ -91,7 +91,12 @@ jobs:
       # Fuzz kosucusu CI makinesinde ve gelistirici makinesinde calisir,
       # cuzdan kodu ise kullanicinin tohumunu gorur; ikisi de "sadece test"
       # degildir.
-      - name: Tarama - dort lockfile de (bulgu = fail)
+      #
+      # budscan/Cargo.lock ayni sebeple eklendi ve asagidaki "her lockfile
+      # tarandi mi" adimi tam olarak bunu yakaladi: budscan kendi
+      # workspace'i oldugu icin kok kilide girmiyor, listeye elle
+      # eklenmeden once kapsam disindaydi. Kapi calisti.
+      - name: Tarama - depodaki her lockfile (bulgu = fail)
         run: |
           set -euo pipefail
           osv-scanner scan source \
@@ -101,7 +106,10 @@ jobs:
             --lockfile=fuzz/Cargo.lock \
             --lockfile=wallet-core/Cargo.lock \
             --lockfile=note-packing/Cargo.lock \
-            --lockfile=xtask/gates/Cargo.lock
+            --lockfile=xtask/gates/Cargo.lock \
+            --lockfile=xtask/tools/Cargo.lock \
+            --lockfile=lubot/Cargo.lock \
+            --lockfile=budscan/Cargo.lock
 
       # Yukaridaki listenin eksilmemesi icin: depodaki her Cargo.lock taranmali.
       # Yeni bir alt-crate eklendiginde kilidi sessizce kapsam disinda kalirsa

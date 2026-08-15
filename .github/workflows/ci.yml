@@ -460,6 +460,48 @@ jobs:
           cargo test --manifest-path wallet-core/Cargo.toml --features wasm --lib binding 2>&1 | tee -a /tmp/wallet-core-gate.txt
           cargo run --release --manifest-path xtask/gates/Cargo.toml -- wallet-core-gate /tmp/wallet-core-gate.txt
 
+  # ============================ Budscan (web3 tarayici cekirdegi) ============================
+  budscan:
+    # Budscan `budlum-core`'a baglanmiyor ve iki tanimi kopyaliyor: ad kurali
+    # ve ContentId. Kopyalar sessizce ayrisabilir ve ayrismalari sessiz
+    # sonuclar uretir (tarayici bir adi kabul eder zincir etmez; ya da
+    # tarayici bir baytin dogrulandigini soyler zincir baska kimlik hesaplar).
+    # `budscan-name-rule-parity` o iki sessizligi gurultuye ceviriyor.
+    name: Budscan (tarayici cekirdegi + yama katmani)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-07-16
+        with:
+          toolchain: "1.97.0"
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: budscan
+          workspaces: budscan
+      - name: Format
+        run: cargo fmt --manifest-path budscan/Cargo.toml --all -- --check
+      - name: Clippy (pedantic, -D warnings)
+        run: cargo clippy --manifest-path budscan/Cargo.toml --all-targets -- -D warnings
+      - name: budscan testleri
+        run: cargo test --manifest-path budscan/Cargo.toml
+      - name: budscan kendi kanaryalari
+        # Ikili kendi ic kanaryalarini kosar: sema hicbir zaman ad olmaz, bos
+        # kanit `dogrulandi` demez, bosta kalan bir yama kontrolu gecmez.
+        run: cargo run --manifest-path budscan/Cargo.toml --bin budscan -- kendini-sina
+      - name: Kapi kanaryasi (vacuous degil kaniti)
+        run: |
+          set -euo pipefail
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- budscan-name-rule-parity --self-test
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- budscan-patchset --self-test
+      - name: Ad kurali ve ContentId parity
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- budscan-name-rule-parity
+      - name: Yama katmani (liste=disk, yabanci marka yok)
+        run: cargo run --release --manifest-path xtask/gates/Cargo.toml -- budscan-patchset
+
   # ============================  / Bolum 4 (BNS gate) ============================
   bns-gate:
     #  Bolum 4 modul-ayrimi: BNS'in kendi CI gate'i (B.U.D. kapi deseni).

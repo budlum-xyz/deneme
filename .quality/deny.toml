@@ -36,6 +36,10 @@ allow = [
     # CDLA-Permissive-2.0 OSI-onaylı değil ama permissive, data license; reqwest zinciri için gerekli.
     # Gerekçe: webpki-roots Mozilla CA bundle data'sı için CDLA-Permissive-2.0 kullanır, permissive.
     "CDLA-Permissive-2.0",
+    # PolyForm Shield 1.0.0: bu deponun KENDİ lisansı (LicenseRef,
+    # SPDX dışı). cargo-deny workspace üyelerinin lisansını da denetlediği
+    # için allow listesine girer.
+    "LicenseRef-PolyForm-Shield-1.0.0",
 ]
 
 # On copyleft (GPL / AGPL / LGPL / SSPL): there is deliberately no `deny`

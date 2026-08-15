@@ -22,6 +22,7 @@ const GUARD_PREFIXES: &[&str] = &[
     "reject_",
     "refuse_",
     "deny_",
+    "admit_",
     "guard_",
 ];
 
