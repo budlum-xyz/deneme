@@ -28,18 +28,25 @@ fn model_and_request(requester: Address) -> (AiModelSpec, AiInferenceRequest) {
         execution_class: 0,
         execution_dims: None,
         execution_weights_digest: None,
+        modalities: crate::lubot::perception::ModalitySet::text_only(),
     };
     let mut request = AiInferenceRequest {
         request_id: AiRequestId::default(),
         requester,
         model_id,
-        input_commitment: [0xB2; 32],
+        input_commitment: crate::ai::types::canonical_input_commitment(&[]),
         input_ref: BoundedBytes::empty(),
         max_fee: 100,
         callback: None,
         submitted_at_block: 0,
         deadline_block: 100,
         effort: crate::lubot::effort::EffortTier::default(),
+        perception: Some(crate::lubot::perception::PerceptionRequest {
+            asset_id: crate::pollen::AssetId([0xAB; 32]),
+            content_id: crate::storage::content_id::ContentId([0xBC; 32]),
+            kind: crate::lubot::perception::PerceptionKind::Text,
+            declared_units: 100,
+        }),
     };
     request.request_id = request.calculate_id();
     (spec, request)
@@ -553,4 +560,153 @@ fn an_out_of_range_effort_tier_is_refused_on_the_wire() {
             "effort_tenths {smuggled} is outside 0.5x..=10.0x and must be refused"
         );
     }
+}
+
+#[test]
+fn finalized_lubot_output_is_bridged_to_socialfi_nft() {
+    let mut state = AccountState::new();
+    let requester = Address::from([0x51; 32]);
+    let operator = Address::from([0x52; 32]);
+    let fee = state.base_fee.max(1);
+
+    let (spec, request) = model_and_request(requester);
+    state.ai_registry.register_model(spec).expect("model");
+
+    // Operatörler: LUBOT_OPERATOR bond (sonuç imzalama yetkisi).
+    // Kayıt, doğrulayıcı başına tek sonuç kabul eder (anti-dup /
+    // anti-equivocation) - eşik 2 için iki AYRI operatör gerekir.
+    let operator2 = Address::from([0x53; 32]);
+    let bond_amount = state.required_lubot_bond(DEFAULT_CHAIN_ID);
+    for op in [operator, operator2] {
+        state.add_balance(&op, bond_amount + fee * 2);
+        let bond = Transaction::new_lubot_operator_bond(op, bond_amount, fee, 0, DEFAULT_CHAIN_ID);
+        Executor::apply_transaction(&mut state, &bond).expect("bond");
+    }
+
+    // İstek: executor yolu (perception kabul kapısı dahil).
+    state.add_balance(&requester, request.max_fee + fee);
+    let req_tx = Transaction::new_with_chain_id(
+        requester,
+        Address::zero(),
+        0,
+        fee,
+        0,
+        vec![],
+        DEFAULT_CHAIN_ID,
+        TransactionType::AiInferenceRequest(request.clone()),
+    );
+    Executor::apply_transaction(&mut state, &req_tx).expect("request");
+
+    // İki uyuşan sonuç (threshold=2, iki ayrı operatör) → finalize →
+    // NFT köprüsü.
+    let output = b"lubot-finalized-output".to_vec();
+    let commitment = [0xC3; 32];
+    for (tx_nonce, op) in [(1u64, operator), (2u64, operator2)] {
+        let res = AiInferenceResult {
+            request_id: request.request_id,
+            verifier: op,
+            output_commitment: commitment,
+            output_ref: BoundedBytes::try_new(output.clone()).unwrap(),
+            result_nonce: 1,
+            signature: vec![1],
+            submitted_at_block: 0,
+        };
+        let tx = Transaction::new_with_chain_id(
+            op,
+            Address::zero(),
+            0,
+            fee,
+            tx_nonce,
+            vec![],
+            DEFAULT_CHAIN_ID,
+            TransactionType::AiInferenceResult(res),
+        );
+        Executor::apply_transaction(&mut state, &tx).expect("result");
+    }
+
+    // Köprü kanıtı: çıktının ContentId'si, istek sahibine ait NFT olarak
+    // kayıtlı (WIRING: wired).
+    let cid = crate::storage::content_id::ContentId::of(&output);
+    let bridged = state
+        .nft_registry
+        .nfts
+        .values()
+        .any(|n| n.content_id == cid && n.owner == requester);
+    assert!(
+        bridged,
+        "finalized output must be bridged as a requester-owned NFT"
+    );
+
+    // Ters yön (Pollen köprüsü) kanıtı: aynı çıktı, sahibinin manifest'i
+    // olarak DataAsset kayıtlı - grant mekanizmasından okunabilir.
+    let asset_id = crate::pollen::data_rights::DataAsset::derive_id(&requester, &cid, &commitment);
+    assert!(
+        state.marketplace.data_assets.contains_key(&asset_id),
+        "finalized output must be registered as a Pollen DataAsset"
+    );
+}
+
+#[test]
+fn ai_model_register_charges_governance_fee_exactly() {
+    let mut state = AccountState::new();
+    let owner = Address::from([0x61; 32]);
+    let fee = state.base_fee.max(1);
+    let reg_fee = state.registry.params().ai_model_register_fee;
+    assert!(
+        reg_fee > 0,
+        "test, ücretin varsayılanda açık olduğunu varsayar"
+    );
+    state.add_balance(&owner, reg_fee + fee);
+
+    let (spec, _request) = model_and_request(owner);
+    let tx = Transaction::new_with_chain_id(
+        owner,
+        Address::zero(),
+        reg_fee, // exact-cost: tam ücret
+        fee,
+        0,
+        vec![],
+        DEFAULT_CHAIN_ID,
+        TransactionType::AiModelRegister(spec.clone()),
+    );
+    Executor::apply_transaction(&mut state, &tx).expect("paid registration must apply");
+
+    assert!(state.ai_registry.models.contains_key(&spec.model_id));
+    // Exact-cost: reg_fee + tx.fee düşülür; başka hiçbir şey değil.
+    assert_eq!(state.get_balance(&owner), 0);
+}
+
+#[test]
+fn ai_model_register_below_fee_is_rejected_atomically() {
+    let mut state = AccountState::new();
+    let owner = Address::from([0x62; 32]);
+    let fee = state.base_fee.max(1);
+    let reg_fee = state.registry.params().ai_model_register_fee;
+    assert!(reg_fee > 0);
+    let balance = reg_fee + fee;
+    state.add_balance(&owner, balance);
+
+    let (spec, _request) = model_and_request(owner);
+    let tx = Transaction::new_with_chain_id(
+        owner,
+        Address::zero(),
+        reg_fee - 1, // reg_fee'den az; bakiye yeterli, spesifik kapı tetiklenir
+        fee,
+        0,
+        vec![],
+        DEFAULT_CHAIN_ID,
+        TransactionType::AiModelRegister(spec.clone()),
+    );
+    let err = Executor::apply_transaction(&mut state, &tx)
+        .expect_err("below-fee registration must fail closed");
+    assert!(
+        err.contains("AI model registration requires amount"),
+        "got: {err}"
+    );
+    assert!(!state.ai_registry.models.contains_key(&spec.model_id));
+    assert_eq!(
+        state.get_balance(&owner),
+        balance,
+        "atomic: hiçbir kesinti olmamalı"
+    );
 }

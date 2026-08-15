@@ -153,6 +153,8 @@ pub mod advisory_reachability;
 pub mod ai_verification_status_locks;
 pub mod audit_findings_locks;
 #[cfg(test)]
+pub mod f20_oncelikli_bulgular;
+#[cfg(test)]
 pub mod hardening_h2_locks;
 #[cfg(test)]
 pub mod hardening_h4_locks;
@@ -178,6 +180,12 @@ pub mod genesis_repro;
 #[cfg(test)]
 pub mod hash_input_serialize_locks;
 // Chain ids must not collide with another chain's registry entry.
+pub mod blockchair_fixture_locks;
 #[cfg(test)]
 pub mod chain_id_registry_locks;
 pub mod consensus_bypass_locks;
+// Gerçek zincir fixture'larıyla differential testler (merkle/RLP/halving).
+// Fixture tek kaynaktır: config/fixtures/gercek-zincir.json; aynı dosyayı
+// xtask `fixture-integrity` gate'i de doğrular.
+#[cfg(test)]
+pub mod gercek_zincir_fixtures;

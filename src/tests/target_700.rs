@@ -67,9 +67,10 @@ fn bns_register_table_resolves_owners() {
 #[test]
 fn bns_register_duplicate_live_name_rejected() {
     let mut r = BnsRegistry::new();
-    r.register("arena.bud".into(), addr(1), 0, 1000).unwrap();
+    r.register("lubosruler.bud".into(), addr(1), 0, 1000)
+        .unwrap();
     assert!(matches!(
-        r.register("arena.bud".into(), addr(2), 0, 1000),
+        r.register("lubosruler.bud".into(), addr(2), 0, 1000),
         Err(BnsError::NameTaken)
     ));
 }

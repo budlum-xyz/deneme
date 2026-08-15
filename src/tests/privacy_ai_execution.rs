@@ -185,79 +185,32 @@ fn ai_require_execution_proof_blocks_finalize_without_proof() {
     let verifier = test_addr_from_byte(2u8);
     let mut reg = AiRegistry::new();
     let mid = AiModelId::of(&owner, &[9u8; 32], 1);
-    reg.register_model(AiModelSpec {
-        model_id: mid,
-        model_hash: [9u8; 32],
-        owner,
-        min_verifier_count: 1,
-        agreement_threshold: 1,
-        max_input_ref_bytes: 1024,
-        max_output_ref_bytes: 1024,
-        request_deadline_blocks: 100,
-        result_deadline_blocks: 100,
-        version: 1,
-        active: true,
-        require_execution_proof: true,
-        execution_program_hash: Some([7u8; 32]),
-        execution_class: 1,
-        execution_dims: None,
-        // A proof-required model has to register the weights it expects.
-        // program_hash binds the architecture only, so without this the
-        // structural check cannot tell two models of the same shape apart.
-        execution_weights_digest: Some([11u8; 32]),
-    })
-    .unwrap();
-
-    let mut req = AiInferenceRequest {
-        request_id: AiRequestId([0u8; 32]),
-        requester: owner,
-        model_id: mid,
-        input_commitment: [3u8; 32],
-        input_ref: BoundedBytes::empty(),
-        max_fee: 100,
-        callback: None,
-        submitted_at_block: 1,
-        deadline_block: 50,
-        effort: crate::lubot::effort::EffortTier::default(),
-    };
-    req.request_id = req.calculate_id();
-    reg.submit_request(req.clone(), 1).unwrap();
-
-    let res = AiInferenceResult {
-        request_id: req.request_id,
-        verifier,
-        output_commitment: [4u8; 32],
-        output_ref: BoundedBytes::empty(),
-        result_nonce: 1,
-        signature: vec![0; 64],
-        submitted_at_block: 2,
-    };
-    let outcome = reg.submit_result(res.clone(), 2).unwrap();
+    let err = reg
+        .register_model(AiModelSpec {
+            model_id: mid,
+            model_hash: [9u8; 32],
+            owner,
+            min_verifier_count: 1,
+            agreement_threshold: 1,
+            max_input_ref_bytes: 1024,
+            max_output_ref_bytes: 1024,
+            request_deadline_blocks: 100,
+            result_deadline_blocks: 100,
+            version: 1,
+            active: true,
+            require_execution_proof: true,
+            execution_program_hash: Some([7u8; 32]),
+            execution_class: 1,
+            execution_dims: None,
+            execution_weights_digest: Some([11u8; 32]),
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
+        })
+        .expect_err(
+            "F-04: proof-required models cannot register while STARK verification is not live",
+        );
     assert!(
-        outcome.is_none(),
-        "must not finalize without execution proof"
+        err.contains("full AI STARK"),
+        "registration must name the missing verifier, got {err}"
     );
-
-    // Attach valid structural proof
-    let proof = AiExecutionProof {
-        model_id: mid,
-        input_commitment: req.input_commitment,
-        output_commitment: res.output_commitment,
-        program_hash: [7u8; 32],
-        proof_bytes: {
-            // Minimal fake won't deserialize - use real prove for attach path
-            vec![1]
-        },
-        steps: 1,
-        gas_used: 1,
-        weights_digest: Some([11u8; 32]),
-        public_inputs: None,
-    };
-    // Structural attach requires postcard envelope in executor; registry attach
-    // Only needs structural with non-empty proof_bytes
-    assert!(reg
-        .attach_execution_proof(&req.request_id, &verifier, proof)
-        .is_ok());
-    let fin = reg.try_finalize_with_proofs(&req.request_id);
-    assert!(fin.is_some(), "finalize after proof attach");
+    let _ = verifier;
 }

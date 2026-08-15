@@ -31,6 +31,7 @@ fn model_spec(owner: Address) -> AiModelSpec {
         execution_class: 0,
         execution_dims: None,
         execution_weights_digest: None,
+        modalities: crate::lubot::perception::ModalitySet::text_only(),
     }
 }
 
@@ -38,19 +39,37 @@ fn request(
     requester: Address,
     model_id: AiModelId,
     input_ref: Vec<u8>,
-    seed: u8,
+    _seed: u8,
 ) -> AiInferenceRequest {
+    // V3 okuma beyanı: Pollen referansı çözülebiliyorsa beyan aynı varlığı
+    // taşır (executor kabul kapısı varlık eşleşmesini denetler); opaque
+    // girdilerde nötr bir metin beyanı taşınır.
+    let perception = match crate::pollen::data_rights::AiDataInputRef::decode(&input_ref) {
+        Ok(Some(r)) => Some(crate::lubot::perception::PerceptionRequest {
+            asset_id: r.asset_id,
+            content_id: crate::storage::content_id::ContentId([0; 32]),
+            kind: crate::lubot::perception::PerceptionKind::Text,
+            declared_units: 100,
+        }),
+        _ => Some(crate::lubot::perception::PerceptionRequest {
+            asset_id: crate::pollen::AssetId([0xEE; 32]),
+            content_id: crate::storage::content_id::ContentId([0; 32]),
+            kind: crate::lubot::perception::PerceptionKind::Text,
+            declared_units: 100,
+        }),
+    };
     let mut req = AiInferenceRequest {
         request_id: Default::default(),
         requester,
         model_id,
-        input_commitment: [seed; 32],
+        input_commitment: crate::ai::types::canonical_input_commitment(&input_ref),
         input_ref: BoundedBytes::try_new(input_ref).unwrap(),
         max_fee: 10,
         callback: None,
         submitted_at_block: 0,
         deadline_block: 10,
         effort: crate::lubot::effort::EffortTier::default(),
+        perception,
     };
     req.request_id = req.calculate_id();
     req
