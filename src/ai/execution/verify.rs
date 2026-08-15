@@ -175,6 +175,7 @@ mod tests {
             submitted_at_block: 0,
             deadline_block: 10,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         let res = AiInferenceResult {
             request_id: req.request_id,
@@ -226,6 +227,7 @@ mod tests {
             execution_class: 1,
             execution_dims: None,
             execution_weights_digest: None,
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
         let proof = AiExecutionProof {
             model_id: mid,
@@ -313,6 +315,7 @@ mod tests {
             execution_class: 1,
             execution_dims: None,
             execution_weights_digest: Some(weights_digest(&honest)),
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
 
         // A proof that is correct in every other respect but claims the
@@ -380,6 +383,7 @@ mod tests {
             execution_class: 1,
             execution_dims: None,
             execution_weights_digest: Some(weights_digest(&honest)),
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
         let proof = AiExecutionProof {
             model_id: mid,
@@ -420,6 +424,7 @@ mod tests {
             execution_class: 0,
             execution_dims: None,
             execution_weights_digest: None,
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
         let proof = AiExecutionProof {
             model_id: mid,
@@ -666,6 +671,7 @@ mod stark_path_e2e {
             execution_class: 1,
             execution_weights_digest: Some(weights_digest(&spec)),
             execution_dims: Some(spec.dims.clone()),
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
 
         // The verifier rebuilds the guest from `execution_dims` alone.
@@ -726,6 +732,7 @@ mod stark_path_e2e {
             execution_class: 1,
             execution_weights_digest: Some(weights_digest(&spec)),
             execution_dims: Some(spec.dims.clone()),
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
         let program = guest_program_for_model(&model).unwrap();
 
@@ -762,6 +769,7 @@ mod stark_path_e2e {
             execution_class: 1,
             execution_weights_digest: Some(weights_digest(spec)),
             execution_dims: Some(dims),
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         }
     }
 

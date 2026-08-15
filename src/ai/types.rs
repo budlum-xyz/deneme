@@ -167,6 +167,17 @@ pub struct AiModelSpec {
     /// require execution proofs.
     #[serde(default)]
     pub execution_dims: Option<Vec<u16>>,
+    /// The set of modalities the model declared at registration
+    /// ([`crate::lubot::perception::ModalitySet`]).
+    ///
+    /// Default `text_only`: every model registered before this field read
+    /// text, and re-reading them as declaring nothing (`ModalitySet::none`)
+    /// would silently stop them serving. New models must declare explicitly;
+    /// the registration RPC exposes the field, and a model that declares
+    /// `none` refuses every request, which is the correct behavior for a
+    /// declaration that was lost.
+    #[serde(default = "crate::lubot::perception::ModalitySet::text_only")]
+    pub modalities: crate::lubot::perception::ModalitySet,
 }
 
 impl AiModelSpec {
@@ -191,6 +202,23 @@ impl AiModelSpec {
         }
         if self.request_deadline_blocks == 0 || self.result_deadline_blocks == 0 {
             return Err("Deadlines must be >= 1 block".into());
+        }
+        // execution_dims sınırları: None = eski kayıtlar (execution proof
+        // isteyemezler, yukarıda denetlenir). Some ise: en az 2 katman
+        // (girdi + çıktı), en fazla 32 katman ve hiçbir katman 0 olamaz.
+        // Sınırsız/bozuk dims vektörü kayıtta şişkinlik ve zehirli misafir
+        // program şekilleri üretirdi; misafir program yalnız mimariye bağlı
+        // olduğundan bu doğrulama kayıt anında yapılır.
+        if let Some(dims) = &self.execution_dims {
+            if dims.len() < 2 {
+                return Err("execution_dims en az 2 katman (girdi + çıktı) içermeli".into());
+            }
+            if dims.len() > 32 {
+                return Err("execution_dims en fazla 32 katman içerebilir".into());
+            }
+            if dims.contains(&0) {
+                return Err("execution_dims katman boyutu 0 olamaz".into());
+            }
         }
         Ok(())
     }
@@ -241,6 +269,20 @@ pub struct AiInferenceRequest {
     pub callback: Option<Address>,
     pub submitted_at_block: u64,
     pub deadline_block: u64,
+    /// V3: the declared read - which object, what kind, how much.
+    ///
+    /// `None` means the request was built before the format carried a
+    /// declaration. The executor refuses those fail-closed
+    /// (`ai_perception_undeclared`): a request that does not say what it is
+    /// reading cannot be admitted, because the whole point of the
+    /// declaration is that a text model is never handed an image it would
+    /// read as confident nonsense.
+    ///
+    /// The declaration is part of the request id (V3 tag): an operator
+    /// cannot answer a different reading than the one the requester paid
+    /// for, for the same reason the effort tier is inside the id.
+    #[serde(default)]
+    pub perception: Option<crate::lubot::perception::PerceptionRequest>,
     /// How much work the requester is paying for.
     ///
     /// `src/lubot/effort.rs` promised two rules and could keep neither while
@@ -254,6 +296,23 @@ pub struct AiInferenceRequest {
     /// amount of work anyone could ask for.
     #[serde(default)]
     pub effort: crate::lubot::effort::EffortTier,
+}
+
+/// The canonical commitment over an input ref: `LUBOT_INPUT_COMMIT_V1`
+/// domain tag + the ref bytes.
+///
+/// Admission (`lubot::admit_inference_request`) verifies that a request's
+/// `input_commitment` equals this value. Without that check, an attacker can
+/// submit the same content under arbitrarily many distinct commitments -
+/// each yielding a distinct request id - and multiply operator work without
+/// paying for new content. The builder (`lubot::inference`) uses the same
+/// function, so honest requests pass unchanged.
+#[must_use]
+pub fn canonical_input_commitment(input_ref: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"LUBOT_INPUT_COMMIT_V1");
+    hasher.update(input_ref);
+    hasher.finalize().into()
 }
 
 impl AiInferenceRequest {
@@ -270,7 +329,7 @@ impl AiInferenceRequest {
     /// the failure the tag exists to prevent.
     pub fn calculate_id(&self) -> AiRequestId {
         let mut hasher = Sha256::new();
-        hasher.update(b"BDLM_AI_REQUEST_ID_V2");
+        hasher.update(b"BDLM_AI_REQUEST_ID_V3");
         hasher.update(self.requester.as_bytes());
         hasher.update(self.model_id.0);
         hasher.update(self.input_commitment);
@@ -285,6 +344,16 @@ impl AiInferenceRequest {
         hasher.update(self.submitted_at_block.to_le_bytes());
         hasher.update(self.deadline_block.to_le_bytes());
         hasher.update(self.effort.as_bytes());
+        match &self.perception {
+            Some(p) => {
+                hasher.update(b"perception");
+                hasher.update(p.asset_id.0);
+                hasher.update(p.content_id.0);
+                hasher.update([p.kind.perception_tag()]);
+                hasher.update(p.declared_units.to_le_bytes());
+            }
+            None => hasher.update(b"no_perception"),
+        }
         AiRequestId(hasher.finalize().into())
     }
 

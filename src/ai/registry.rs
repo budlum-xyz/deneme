@@ -144,6 +144,22 @@ impl AiRegistry {
 
     pub fn register_model(&mut self, spec: AiModelSpec) -> Result<AiModelId, String> {
         spec.validate()?;
+        // F-04 / F-07: a proof-required model cannot be satisfied while the
+        // production verifier is not live. Refuse registration rather than
+        // accept a model whose results will only ever fail-closed.
+        if spec.require_execution_proof && !crate::ai::FULL_AI_STARK_VERIFICATION_LIVE {
+            return Err(
+                "require_execution_proof models are not accepted until full AI STARK verification is live"
+                    .into(),
+            );
+        }
+        if spec.require_execution_proof
+            && (spec.execution_program_hash.is_none() || spec.execution_dims.is_none())
+        {
+            return Err(
+                "require_execution_proof requires execution_program_hash and execution_dims".into(),
+            );
+        }
         if self.models.contains_key(&spec.model_id) {
             return Err(format!(
                 "Model ID {} is already registered",
@@ -213,6 +229,17 @@ impl AiRegistry {
         result: AiInferenceResult,
         current_block: u64,
     ) -> Result<Option<AiInferenceOutcome>, String> {
+        // Strix HIGH (#359, deneme): verifier kimligi denetlenmeden sonuc
+        // sayiliyordu - herhangi bir adres uydurma verifier ile
+        // agreement_threshold'a katkida bulunabiliyordu. Artik sonuc
+        // ancak yetkili (stake esigini karsilayan, whitelist modunda
+        // listede olan) bir verifier'dan kabul edilir.
+        if !self.is_verifier_authorized(&result.verifier) {
+            return Err(format!(
+                "Verifier {} is not authorized to submit AI results",
+                result.verifier.to_hex()
+            ));
+        }
         let request = match self.requests.get(&result.request_id) {
             Some(r) => r.clone(),
             None => {
@@ -1451,15 +1478,22 @@ impl AiRegistry {
     }
 
     /// Check if a verifier is authorized to submit results.
-    /// If whitelist is empty (permissionless mode), any staked verifier is allowed.
+    /// Verifiers must satisfy the minimum stake requirement in all modes.
+    /// If whitelist is empty (permissionless mode), any sufficiently staked verifier is allowed.
     /// If whitelist is non-empty (permissioned mode), only whitelisted verifiers.
     pub fn is_verifier_authorized(&self, verifier: &Address) -> bool {
+        // Strix HIGH (#359, deneme): stake esigi her modda zorunludur;
+        // "staked" = bir kayit var, ama MIN_VERIFIER_STAKE altinda kalan
+        // bir kayit Sybil direncini saglamaz.
+        if self.verifier_stake(verifier) < MIN_VERIFIER_STAKE {
+            return false;
+        }
         if self.verifier_whitelist.is_empty() {
             // Permissionless mode: staked verifier = authorized
-            self.is_staked_verifier(verifier)
+            true
         } else {
             // Permissioned mode: must be in whitelist AND staked
-            self.verifier_whitelist.contains(verifier) && self.is_staked_verifier(verifier)
+            self.verifier_whitelist.contains(verifier)
         }
     }
 

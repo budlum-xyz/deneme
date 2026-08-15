@@ -15,6 +15,14 @@ pub use execution::{
     MLP_GUEST_VERSION,
 };
 pub use registry::AiRegistry;
+
+/// Plonky3 STARK doğrulaması üretim kabul koşulu değildir.
+///
+/// F-03 / F-04 / F-08 / F-09: full Plonky3 STARK verification of AI
+/// inference is compiled and tested, but it is not the production
+/// acceptance condition. Flip this only together with an AIR that binds
+/// the initial memory image (F-08) from a Fiat-Shamir transcript (F-09).
+pub const FULL_AI_STARK_VERIFICATION_LIVE: bool = false;
 pub use types::{
     AiAgentPayment, AiAgentPaymentSettlement, AiAgentReputation, AiCallbackEvent,
     AiDisputeStatusInfo, AiExecutionProof, AiInferenceOutcome, AiInferenceRequest,
@@ -54,6 +62,7 @@ mod tests {
             execution_class: 0,
             execution_dims: None,
             execution_weights_digest: None,
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
 
         assert!(registry.register_model(spec.clone()).is_ok());
@@ -85,6 +94,7 @@ mod tests {
             execution_class: 0,
             execution_dims: None,
             execution_weights_digest: None,
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         };
         registry.register_model(spec).unwrap();
 
@@ -102,6 +112,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
 
@@ -170,6 +181,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -184,6 +196,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -278,6 +291,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -292,6 +306,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
 
@@ -331,6 +346,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -345,6 +361,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -402,6 +419,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -416,6 +434,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -474,6 +493,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -488,6 +508,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -559,6 +580,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -573,6 +595,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -644,6 +667,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -658,6 +682,7 @@ mod tests {
             submitted_at_block: 50,
             deadline_block: 150,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
 
@@ -694,6 +719,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -711,6 +737,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -771,6 +798,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -785,6 +813,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -825,6 +854,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -846,6 +876,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -916,6 +947,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -930,6 +962,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -974,6 +1007,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -988,6 +1022,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -1043,6 +1078,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1057,6 +1093,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -1095,6 +1132,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1112,6 +1150,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let result = registry.submit_request(req, 5);
@@ -1150,6 +1189,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1183,6 +1223,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1203,6 +1244,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         assert!(registry.submit_request(req, 5).is_ok());
@@ -1236,6 +1278,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1257,6 +1300,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -1323,6 +1367,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1344,6 +1389,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -1408,6 +1454,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1457,6 +1504,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1493,6 +1541,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1534,6 +1583,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1549,6 +1599,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -1588,6 +1639,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1602,6 +1654,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let result = registry.submit_request(req, 5);
@@ -1637,6 +1690,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1661,6 +1715,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 5).unwrap();
@@ -1738,6 +1793,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1759,6 +1815,7 @@ mod tests {
             execution_class: 0,
             execution_dims: None,
             execution_weights_digest: None,
+            modalities: crate::lubot::perception::ModalitySet::text_only(),
         });
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("already registered"));
@@ -1790,6 +1847,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1824,6 +1882,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
 
@@ -1862,6 +1921,7 @@ mod tests {
                 execution_class: 0,
                 execution_dims: None,
                 execution_weights_digest: None,
+                modalities: crate::lubot::perception::ModalitySet::text_only(),
             })
             .unwrap();
         (registry, model_id, owner)
@@ -1887,6 +1947,7 @@ mod tests {
             submitted_at_block: current_block,
             deadline_block,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         registry.submit_request(req, current_block).unwrap()
@@ -1913,6 +1974,7 @@ mod tests {
             submitted_at_block: current_block,
             deadline_block,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         registry.submit_request(req, current_block).unwrap()
@@ -1975,6 +2037,7 @@ mod tests {
             submitted_at_block: 111,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let result = registry.submit_request(req, 111);
@@ -2002,6 +2065,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         // Override result_deadline_blocks to 200 so result_deadline=210 > deadline_block=110
@@ -2072,6 +2136,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 200, // Must be >= result_deadline so check #1 doesn't fire,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 10).unwrap();
@@ -2104,6 +2169,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 55,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let req_id = registry.submit_request(req, 10).unwrap();
@@ -2466,6 +2532,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let result = registry.submit_request(req, 10);
@@ -2675,6 +2742,7 @@ mod tests {
             submitted_at_block: 10,
             deadline_block: 110,
             effort: crate::lubot::effort::EffortTier::default(),
+            perception: None,
         };
         req.request_id = req.calculate_id();
         let result = registry.submit_request(req, 10);
