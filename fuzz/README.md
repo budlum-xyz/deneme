@@ -48,7 +48,7 @@ bunlar in-tree F10 testlerinin kanonik boş RLP ve boş trie başlangıç girdil
 resmî Ethereum fixture paketi değildir. Yeni seed üretimi için:
 
 ```bash
-./scripts/generate_zkvm_seed_corpus.sh
+cargo run --manifest-path ../xtask/tools/Cargo.toml -- seed-corpus
 ```
 
 ## CI entegrasyonu sınırı
