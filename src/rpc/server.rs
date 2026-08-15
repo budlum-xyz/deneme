@@ -2734,9 +2734,26 @@ impl BudlumApiServer for RpcServer {
         grant_duration_blocks: u64,
         max_reads: u32,
         payment_commitment: String,
+        buyer_signature: String,
     ) -> Result<serde_json::Value, ErrorObjectOwned> {
         let authorization_id = parse_pollen_asset_id(&authorization_id)?;
         let payment_commitment = parse_hex32_field(&payment_commitment, "paymentCommitment")?;
+        // Strix HIGH (#358, 2. denetim): buyer imzasi zorunlu — satin alma
+        // parametrelerinin tamamina baglanmis ed25519 imzasi.
+        let clean_sig = buyer_signature.strip_prefix("0x").unwrap_or(&buyer_signature);
+        let sig_bytes = hex::decode(clean_sig).map_err(|e| {
+            ErrorObjectOwned::owned(-32602, format!("Invalid buyerSignature hex: {e}"), None::<()>)
+        })?;
+        if sig_bytes.len() != 64 {
+            return Err(ErrorObjectOwned::owned(
+                -32602,
+                "buyerSignature must be 64 bytes",
+                None::<()>,
+            ));
+        }
+        let mut sig_arr = [0u8; 64];
+        sig_arr.copy_from_slice(&sig_bytes);
+        let buyer_signature = crate::pollen::Signature64::from(sig_arr);
         if payment_commitment == [0u8; 32] {
             return Err(ErrorObjectOwned::owned(
                 -32602,
@@ -2800,6 +2817,7 @@ impl BudlumApiServer for RpcServer {
                 grant_duration_blocks,
                 max_reads,
                 payment_commitment,
+                buyer_signature,
             )
             .map_err(|e| ErrorObjectOwned::owned(-32602, e, None::<()>))?;
         let grant = registry
