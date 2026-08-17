@@ -479,6 +479,22 @@ pub enum ReceiptStatus {
     Revoked { reason: String },
 }
 
+impl ReceiptStatus {
+    /// Root commitment baytları (Strix HIGH CWE-345, 2026-08-17): farkli
+    /// odeme-uygunluk durumlari ayni settlement kökünü paylasmamali.
+    pub fn root_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Pending => vec![0],
+            Self::Paid => vec![1],
+            Self::Revoked { reason } => {
+                let mut v = vec![2];
+                v.extend_from_slice(reason.as_bytes());
+                v
+            }
+        }
+    }
+}
+
 impl ProofReceipt {
     /// Yeni bir proof makbuzu oluşturur.
     pub fn new(
@@ -787,6 +803,7 @@ impl ProofMarketState {
             fields.push(receipt.prover.as_bytes().to_vec());
             fields.push(receipt.verification_hash.to_vec());
             fields.push(receipt.reward_claimed.to_le_bytes().to_vec());
+            fields.push(receipt.status.root_bytes());
         }
         let refs: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
         hash_fields_bytes(&refs)
