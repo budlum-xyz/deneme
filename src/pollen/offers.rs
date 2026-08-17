@@ -647,6 +647,15 @@ impl MarketplaceRegistry {
         if !asset.is_active() {
             return Err("cannot sell content under a revoked asset".into());
         }
+        // Strix HIGH (CWE-639, 2026-08-17): manifest'ler paylasilmis
+        // content-addressed kimliklerdir; baska bir yukleyicinin sahipsiz
+        // manifest_id'sini kendi asset'ine baglamak, o icerigin gelecekteki
+        // okuma kapisini ele gecirir. Bind ancak manifest, asset'in kayitli
+        // kanonik manifest'iyle AYNIYSA gecerli.
+        if asset.manifest_id != manifest_id {
+            return Err("cannot bind content that does not match the asset's registered manifest"
+                .into());
+        }
         let owner = asset.owner;
         self.protected_content
             .bind(manifest_id, asset_id, owner, caller)

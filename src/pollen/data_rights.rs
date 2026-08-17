@@ -478,6 +478,7 @@ impl AccessGrant {
     pub fn is_active_for(&self, grantee: &Address, current_block: u64) -> bool {
         self.status == AccessGrantStatus::Active
             && &self.grantee == grantee
+            && current_block >= self.issued_at_block
             && current_block <= self.expires_at_block
             && self.reads_used < self.max_reads
     }
