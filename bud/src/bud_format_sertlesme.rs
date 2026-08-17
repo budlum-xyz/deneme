@@ -1,13 +1,13 @@
-//! B.U.D. 3.0 — MALİYET-DİBİ SERTLEŞTİRMESİ (2026-08-16)
+//! B.U.D. 3.0 - MALİYET-DİBİ SERTLEŞTİRMESİ (2026-08-16)
 //!
-//! Kullanıcı: "B.U.D. 3.0'ı sertleştir — maliyet dibe düşüyor, bu iddialı bir yaklaşım."
+//! Kullanıcı: "B.U.D. 3.0'ı sertleştir - maliyet dibe düşüyor, bu iddialı bir yaklaşım."
 //!
 //! Maliyet ~0'a inince üç risk doğar:
-//! 1. **Gelir boşluğu / DoS** — tarif kirası 0 ise ağ bedava üretir → spam + DoS.
+//! 1. **Gelir boşluğu / DoS** - tarif kirası 0 ise ağ bedava üretir → spam + DoS.
 //!    Sertleştirme: creation-fee tabanı + step ücreti tabanı + spam kapısı.
-//! 2. **Tarif uydurma** — "organik içeriğe tarif buldum" iddiası (güvercin-yuvası K13).
+//! 2. **Tarif uydurma** - "organik içeriğe tarif buldum" iddiası (güvercin-yuvası K13).
 //!    Sertleştirme: tarif doğrulama kapısı (commitment eşleşmeden kabul yok).
-//! 3. **QR türev güvenliği** — türev saklanmaz ama commitment'ı doğrulanmalı.
+//! 3. **QR türev güvenliği** - türev saklanmaz ama commitment'ı doğrulanmalı.
 //!    Sertleştirme: türev commitment kapısı + yeniden üretim doğrulaması.
 //!
 //! Ayrıca "maliyet dibe düştü" İDDİASININ kendisi ölçülmeli: tarifli sınıfta gerçek
@@ -52,7 +52,7 @@ pub fn gelir_guvencesi(creation_fee_usd: f64, nft_per_tb: f64, tavan: f64) -> bo
 // ============================ 2. TARİF UYDURMA SERTLEŞTİRMESİ ============================
 
 /// Tarif doğrulama kapısı: `uret` fonksiyonu commitment'ı karşılamadan kabul YOK.
-/// Güvercin-yuvası (K13): organik içeriğe tarif UYDURULAMAZ — 200k deneme 0 eşleşme.
+/// Güvercin-yuvası (K13): organik içeriğe tarif UYDURULAMAZ - 200k deneme 0 eşleşme.
 pub fn tarif_dogrulama(
     uret_fonksiyon: impl FnOnce(&[u8]) -> Vec<u8>,
     orijinal: &[u8],
@@ -81,7 +81,7 @@ pub fn tarif_uydurulamaz_kanaryasi(hedef: &[u8], deneme: usize) -> bool {
 // ============================ 3. QR TÜREV GÜVENLİĞİ ============================
 
 /// Türev commitment kapısı: QR türev saklanmaz ama üretildiğinde commitment'ı
-/// zincirdeki kayıtla eşleşmeli (yeniden üretim doğrulaması — İ9 deseni).
+/// zincirdeki kayıtla eşleşmeli (yeniden üretim doğrulaması - İ9 deseni).
 pub fn turev_dogrulama(turev: &[u8], beklenen: &[u8; 32]) -> bool {
     let cid = crate::bud_format_container::content_id(turev);
     &cid == beklenen
@@ -90,12 +90,12 @@ pub fn turev_dogrulama(turev: &[u8], beklenen: &[u8; 32]) -> bool {
 // ============================ 4. "MALİYET DİBE DÜŞTÜ" İDDİASI ÖLÇÜMÜ ============================
 
 /// Tarifli sınıfın gerçek maliyet bileşenleri ($/TB):
-/// üretim CPU + QR render + dağıtım — hepsi sıfıra mı gidiyor?
+/// üretim CPU + QR render + dağıtım - hepsi sıfıra mı gidiyor?
 #[derive(Debug, Clone, Copy)]
 pub struct MaliyetBilesenleri {
     pub uretim_cpu_usd_per_tb: f64,  // validatör CPU (step ücreti karşılığı)
     pub qr_render_usd_per_tb: f64,   // QR kare render
-    pub dagitim_usd_per_tb: f64,     // ağ dağıtımı (0 — talep anında)
+    pub dagitim_usd_per_tb: f64,     // ağ dağıtımı (0 - talep anında)
     pub kira_usd_per_tb: f64,        // depolama kirası (R1'de 0)
 }
 
@@ -107,13 +107,13 @@ impl MaliyetBilesenleri {
 }
 
 /// Maliyet dibi iddiası: toplam ≤ tavan × 0.01 (yani 0.00016 $/TB) ise "dibe düştü" ✅.
-/// Bu İDDİALI — doğrulanmalı: üretim CPU'su step ücretiyle, render enerjiyle ölçülür.
+/// Bu İDDİALI - doğrulanmalı: üretim CPU'su step ücretiyle, render enerjiyle ölçülür.
 pub fn dibe_dustu_mu(bilesenler: &MaliyetBilesenleri, tavan: f64) -> bool {
     bilesenler.toplam() <= tavan * 0.01
 }
 
-/// Dürüstlük: üretim CPU'su SIFIR sayılamaz (validatör elektrik harcar) — bu fonksiyon
-/// üretim CPU'su 0 ise RED der (maliyet yok olmaz, doğru cebe taşınır — K14b).
+/// Dürüstlük: üretim CPU'su SIFIR sayılamaz (validatör elektrik harcar) - bu fonksiyon
+/// üretim CPU'su 0 ise RED der (maliyet yok olmaz, doğru cebe taşınır - K14b).
 pub fn uretim_cpu_sifir_degil(bilesenler: &MaliyetBilesenleri) -> bool {
     bilesenler.uretim_cpu_usd_per_tb > 0.0
 }
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn gelir_guvencesi_kapisi() {
-        // Ad: `gelir_guvencesi` DEGIL — `use super::*` ile ayni isimli
+        // Ad: `gelir_guvencesi` DEGIL - `use super::*` ile ayni isimli
         // pub fn ile cakisir (E0061). Kanit: 2026-08-17.
         // NFT 0.05$, 10240 NFT/TB → 512 $/TB ≥ 0.016×0.1 ✓
         assert!(gelir_guvencesi(0.05, 10240.0, 0.016));
@@ -163,14 +163,14 @@ mod tests {
 
     #[test]
     fn tarif_uydurulamaz_kanaryasi_kapisi() {
-        // Ad: `tarif_uydurulamaz_kanaryasi` DEGIL — ustteki pub fn ile cakisir (E0061).
+        // Ad: `tarif_uydurulamaz_kanaryasi` DEGIL - ustteki pub fn ile cakisir (E0061).
         let hedef = vec![0x5A; 64];
         assert!(tarif_uydurulamaz_kanaryasi(&hedef, 200_000), "200k deneme eşleşmemeli");
     }
 
     #[test]
     fn turev_dogrulama_kapisi() {
-        // Ad: `turev_dogrulama` DEGIL — ustteki pub fn ile cakisir (E0061).
+        // Ad: `turev_dogrulama` DEGIL - ustteki pub fn ile cakisir (E0061).
         let turev = b"qr-video-turev";
         let cid = crate::bud_format_container::content_id(turev);
         assert!(turev_dogrulama(turev, &cid));
@@ -186,7 +186,7 @@ mod tests {
             dagitim_usd_per_tb: 0.0,
             kira_usd_per_tb: 0.0,
         };
-        // toplam 0.0015 > 0.00016 → "dibe düşmedi" (dürüst — CPU sıfır değil)
+        // toplam 0.0015 > 0.00016 → "dibe düşmedi" (dürüst - CPU sıfır değil)
         assert!(!dibe_dustu_mu(&b, 0.016));
         assert!(uretim_cpu_sifir_degil(&b), "üretim CPU'su sıfır sayılamaz");
         // CPU 0 → RED (maliyet yok olmaz)

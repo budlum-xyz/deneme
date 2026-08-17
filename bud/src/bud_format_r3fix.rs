@@ -1,6 +1,6 @@
-//! B.U.D. 3.0 — R3 DÜZELTMESİ (2026-08-16, kullanıcı kararı)
+//! B.U.D. 3.0 - R3 DÜZELTMESİ (2026-08-16, kullanıcı kararı)
 //!
-//! Kullanıcı: "R3 bana mantıksız geliyor — sana yüklenen içerik 2.0'daki gibi
+//! Kullanıcı: "R3 bana mantıksız geliyor - sana yüklenen içerik 2.0'daki gibi
 //! sıkıştıktan sonra QR videosu alınıp tarif olsun."
 //!
 //! Eski R3 modeli: entropi-kodlu içerik (foto/video/şifreli) sıkışmaz → ham gövde
@@ -11,7 +11,7 @@
 //! kaydına bağlanır** (gövdeli tarif: codec + sıkışmış gövde + QR türev commitment).
 //! Tutulan = sıkışmış gövde (codec kazancı); QR türev saklanmaz (K-QR-GENISLEME).
 //!
-//! Sonuç: R3 artık "0.3735 zemin" değil — kendi codec'iyle sıkışan, QR-türevli,
+//! Sonuç: R3 artık "0.3735 zemin" değil - kendi codec'iyle sıkışan, QR-türevli,
 //! tarif-bağlı gövdeli tariftir. Fizik zemini yalnız GERÇEKTEN sıkışmayan (şifreli)
 //! içerikte kalır; o da kullanıcı seçimidir (şifreli = gizlilik, ücreti de o).
 
@@ -31,7 +31,7 @@ pub enum Codec {
     Flac,        // ses
     Av1,         // video (çözünürlük korunur)
     Deflate,     // zip/ofis içi
-    None,        // şifreli/gerçekten sıkışmaz — kullanıcı seçimi
+    None,        // şifreli/gerçekten sıkışmaz - kullanıcı seçimi
 }
 
 impl Codec {
@@ -104,7 +104,7 @@ impl R3Tarif {
         orijinal_len as f64 / self.govde.len() as f64
     }
 
-    /// Kira: 0.3735 zemin × erasure / oran — R3'te codec kazancı kiraYI düşürür.
+    /// Kira: 0.3735 zemin × erasure / oran - R3'te codec kazancı kiraYI düşürür.
     /// (Kullanıcı düzeltmesi: R3 artık ham gövde değil, codec-sıkışmış gövde.)
     pub fn kira(&self, orijinal_len: usize, erasure: f64) -> f64 {
         let oran = self.ratio(orijinal_len).max(1.0);
@@ -130,7 +130,7 @@ pub fn r3f_digest(t: &R3Tarif) -> [u8; 32] {
 }
 
 
-/// GERÇEK CODEC ÖLÇÜMLERİ (2026-08-16, ffmpeg 7.1.5 — kullanıcı: "önce gerçek ölçüm"):
+/// GERÇEK CODEC ÖLÇÜMLERİ (2026-08-16, ffmpeg 7.1.5 - kullanıcı: "önce gerçek ölçüm"):
 /// foto.jpg 1600x1200 -> AVIF lossy crf30 = 59.68x · JXL lossless = 1.5x
 /// ses.wav 5sn 44.1k -> FLAC = 6.04x · video.yuv 60kare -> H.264 crf23 = 3393x
 /// metin -> zstd-19 = 8.5x (korpus ölçümü). Canary: bu oranların ÜSTÜ iddia RED.
@@ -211,7 +211,7 @@ mod tests {
         // AVIF 59.68x -> 0.3735*1.031/59.68 = 0.00645 <= 0.016 ✅
         let k_avif = r3_gercek_kira(&Codec::Avif, 1.031);
         assert!(k_avif <= 0.016, "AVIF 0.016 içinde: {k_avif}");
-        // FLAC 6.04x -> 0.0638 (tavan dışı — ses sınıfı oranlama ister)
+        // FLAC 6.04x -> 0.0638 (tavan dışı - ses sınıfı oranlama ister)
         let k_flac = r3_gercek_kira(&Codec::Flac, 1.031);
         assert!(k_flac > 0.016, "FLAC tavan dışı (dürüst): {k_flac}");
         // ham video H.264 3393x -> çok düşük

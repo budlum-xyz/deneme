@@ -1,4 +1,4 @@
-//! B.U.D. 3.0 — ŞARTNAME v4.0 UYUM KAPILARI (2026-08-17)
+//! B.U.D. 3.0 - ŞARTNAME v4.0 UYUM KAPILARI (2026-08-17)
 //!
 //! Kullanıcı: "körü körüne inanmamak lazım", "B.U.D. 3.0'ı sertleştir".
 //! Bu modül BUD-3.0-SARTNAME.md maddelerini (K4, K5, K6, K10, K13, K14b)

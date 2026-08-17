@@ -1,4 +1,4 @@
-//! B.U.D. 3.0 — GERÇEK QR KARE ÜRETİMİ (şartname §7, kullanıcı: "3.0 derinleştir")
+//! B.U.D. 3.0 - GERÇEK QR KARE ÜRETİMİ (şartname §7, kullanıcı: "3.0 derinleştir")
 //!
 //! QR byte-mode (EC=L) kare üretimi: damla baytları → QR versiyon seçimi → modül
 //! matrisi (finder/alignment/timing desenleri + data modülleri). Deterministik
@@ -25,7 +25,7 @@ pub struct QrMatrix {
 }
 
 impl QrMatrix {
-    /// Byte-mode veri için uygun versiyon (EC=L kapasitesinden — ux.rs tablosu).
+    /// Byte-mode veri için uygun versiyon (EC=L kapasitesinden - ux.rs tablosu).
     pub fn version_for(data_len: usize) -> u32 {
         let cap = crate::bud_format_ux::qr_capacity_bytes;
         let mut v = 1;
@@ -135,7 +135,7 @@ impl QrMatrix {
         in_finder(row, col) || row == 6 || col == 6
     }
 
-    /// Özet (deterministik — kare kimliği).
+    /// Özet (deterministik - kare kimliği).
     pub fn digest(&self) -> [u8; 32] {
         let mut h = Sha3_256::new();
         h.update(QRM_MAGIC);
@@ -193,7 +193,7 @@ mod tests {
         let m = QrMatrix::encode(data).unwrap();
         // üst-sol finder: (3,3) çekirdek koyu (0)
         assert_eq!(m.modules[3 * m.dim + 3], 0);
-        // timing: (6, 10) satırda — 10 çift → 0
+        // timing: (6, 10) satırda - 10 çift → 0
         assert_eq!(m.modules[6 * m.dim + 10], 0);
         // veri modülleri dolu (koyu/açık karışık)
         let koyu = m.modules.iter().filter(|&&x| x == 0).count();

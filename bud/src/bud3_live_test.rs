@@ -1,11 +1,11 @@
-//! B.U.D. 3.0 — CANLI UÇTAN UCA DENEY (2026-08-16, kullanıcı: "deneyelim")
+//! B.U.D. 3.0 - CANLI UÇTAN UCA DENEY (2026-08-16, kullanıcı: "deneyelim")
 //!
 //! Zincir: orijinal → (içerik-türüne-göre codec sıkıştır) → R3Tarif (gövde + QR türev
 //! commitment) → QR türev üret (karusel) → GERİ: gövdeyi aç → SHA3 doğrula → birebir.
 //! Görsel + video + metin ile KAYIPSIZLIK + TAM ÇÖZÜNÜRLÜK kanıtı.
 //!
 //! Not: gerçek AVIF/AV1 ffmpeg üretimde; burada zstd-19 vekili (kayıpsız) ile
-//! zincirin DOĞRULUĞU test edilir — oranlar codec'e göre değişir, kayıpsızlık değil.
+//! zincirin DOĞRULUĞU test edilir - oranlar codec'e göre değişir, kayıpsızlık değil.
 //!
 //! Veriler `tests/fixtures/` altında repo icindedir (CI'da /tmp yoktur; kanit:
 //! 2026-08-17 gorsel.png video.yuv metin.log repo'ya gomuldu).
@@ -64,7 +64,7 @@ fn gorsel_png_kayipsiz_tam_cozunurluk() {
 
 #[test]
 fn video_yuv_kayipsiz_tam_cozunurluk() {
-    // 60 kare YUV420 64x48 (276480 B) — video benzeri, tests/fixtures/video.yuv
+    // 60 kare YUV420 64x48 (276480 B) - video benzeri, tests/fixtures/video.yuv
     let yuv = fixture("video.yuv");
     assert!(r3_roundtrip(&yuv, "video/x-raw-yuv"), "YUV kayıpsız");
     // kare boyutu: 64*48*1.5 = 4608 B/kare → 60 kare
@@ -82,7 +82,7 @@ fn metin_log_kayipsiz() {
 #[test]
 fn edition_her_ucu_kodda_var() {
     use crate::bud_format_edition::{Edition, Bud1Custody, Bud1Nft};
-    // 1.0: BYO — kendi sunucu + cihaz
+    // 1.0: BYO - kendi sunucu + cihaz
     let _ext = Bud1Nft::new_external([1u8; 32], "sunucum.example".into(), "uri".into());
     let _dev = Bud1Nft::new_device([2u8; 32], "uri".into(), true);
     // 2.0 ve 3.0 seçilebilir
