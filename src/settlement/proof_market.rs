@@ -163,6 +163,33 @@ pub enum ProofTaskStatus {
     Failed { reason: String },
 }
 
+impl ProofTaskStatus {
+    /// Root commitment için durum baytları (Strix HIGH CWE-345, 2026-08-17):
+    /// `assign` sahipliği ve zamanlamayı `status` alanında değiştirir; root
+    /// status'u atlarsa farklı assignment durumları aynı kökü üretir.
+    pub fn root_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Pending => vec![0],
+            Self::Assigned {
+                prover,
+                assigned_at_epoch,
+            } => {
+                let mut v = vec![1];
+                v.extend_from_slice(prover.as_bytes());
+                v.extend_from_slice(&assigned_at_epoch.to_le_bytes());
+                v
+            }
+            Self::Completed => vec![2],
+            Self::Expired => vec![3],
+            Self::Failed { reason } => {
+                let mut v = vec![4];
+                v.extend_from_slice(reason.as_bytes());
+                v
+            }
+        }
+    }
+}
+
 /// Proof görevi - prover'ların üstlenebileceği bir doğrulama görevi.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProofTask {
@@ -609,6 +636,7 @@ impl ProofMarketState {
         &mut self,
         task_id: [u8; 32],
         receipt: ProofReceipt,
+        verify_proof: impl FnOnce(&ProofReceipt) -> Result<(), String>,
     ) -> Result<(), String> {
         let idx = self
             .active_tasks
@@ -617,6 +645,11 @@ impl ProofMarketState {
             .ok_or("Task not found in active tasks")?;
 
         receipt.validate_for_task(&self.active_tasks[idx])?;
+        // Strix HIGH (CWE-345, 2026-08-17): makbuz yalniz metadata + non-zero
+        // hash tasir; gercek proof dogrulamasi olmadan pending_receipts'e
+        // girmemeli. Dogrulama cagiranin sagladigi hook ile yapilir; market
+        // dogrulamasiz receipt'i kabul etmez, odenmez.
+        verify_proof(&receipt)?;
 
         // Every refusal is decided while the task is still in `active_tasks`.
         //
@@ -747,6 +780,7 @@ impl ProofMarketState {
             // to fail would let the two be disagreed about after the fact.
             fields.push(task.slash_condition_hash.to_vec());
             fields.push(task.min_prover_stake.to_le_bytes().to_vec());
+            fields.push(task.status.root_bytes());
         }
         for receipt in &self.pending_receipts {
             fields.push(receipt.task_id.to_vec());
@@ -931,7 +965,15 @@ mod tests {
 
         let receipt = ProofReceipt::new(task_id, test_address(2), 20, [5u8; 32], 3_000);
         let root_before = market.root();
-        market.complete_task(task_id, receipt).unwrap();
+        market
+            .complete_task(task_id, receipt, |r| {
+                if r.verification_hash == [5u8; 32] {
+                    Ok(())
+                } else {
+                    Err("proof verification failed: unexpected hash".into())
+                }
+            })
+            .unwrap();
         assert_eq!(market.active_tasks.len(), 0);
         assert_eq!(market.pending_receipts.len(), 1);
         assert_eq!(market.total_tasks_completed, 1);
@@ -950,7 +992,9 @@ mod tests {
         task.assign(test_address(2), 0, 10).unwrap();
         market.add_task(task).unwrap();
         let bad_receipt = ProofReceipt::new(task_id, test_address(9), 20, [5u8; 32], 1_000);
-        assert!(market.complete_task(task_id, bad_receipt).is_err());
+        assert!(market
+            .complete_task(task_id, bad_receipt, |_| Ok(()))
+            .is_err());
         assert_eq!(market.active_tasks.len(), 1);
         assert!(market.pending_receipts.is_empty());
     }
@@ -1165,7 +1209,15 @@ mod tests {
         // One receipt, paid, so the prune has something real to remove.
         let live_id = market.active_tasks[1].task_id;
         let receipt = ProofReceipt::new(live_id, test_address(3), 3, [7u8; 32], 100);
-        market.complete_task(live_id, receipt).unwrap();
+        market
+            .complete_task(live_id, receipt, |r| {
+                if r.verification_hash == [7u8; 32] {
+                    Ok(())
+                } else {
+                    Err("proof verification failed: unexpected hash".into())
+                }
+            })
+            .unwrap();
         market.pay_receipt(0).unwrap();
         assert_eq!(market.pending_receipts.len(), 1);
 
