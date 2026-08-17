@@ -142,6 +142,7 @@ enum Commands {
     Catalog,
     /// Rejenerasyon bloğu üret: epoch + PACT sınavı + bütçe → blok hash (İ2+İ8)
     Block {
+        #[arg(short, long, default_value = "bud_block.bud")] output: PathBuf,
         #[arg(long, default_value_t = 0)] epoch: u64,
         #[arg(long, default_value_t = 0)] budget: u64,
         #[arg(long, default_value = "0000000000000000000000000000000000000000000000000000000000000000")] prev: String,
@@ -467,7 +468,7 @@ fn run(cli: Cli) -> Result<String, String> {
             }
             Ok(lines.join("\n"))
         }
-        Commands::Block { epoch, budget, prev } => {
+        Commands::Block { output, epoch, budget, prev } => {
             // prev hex → [u8;32]
             if prev.len() != 64 {
                 return Err("prev_hash 64 hex karakter olmalı".into());
@@ -490,7 +491,14 @@ fn run(cli: Cli) -> Result<String, String> {
                 return Err("blok doğrulanamadı".into());
             }
             let blob = block.to_blob();
-            write_file(&PathBuf::from(format!("/tmp/bud_block_{epoch}.bud")), &blob)?;
+            // Strix LOW (CWE-59, 2026-08-17): /tmp'de sabit epoch-yollu cikti,
+            // yerel saldirganin onceden symlink koyup hedef dosyayi truncate
+            // etmesine izin verirdi. Cikti artik kullanici secimli; mevcut
+            // dosya symlink ise yazim reddedilir (yeni dosya acilir).
+            if output.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+                return Err(format!("çıktı yolu symlink olamaz: {}", output.display()));
+            }
+            write_file(&output, &blob)?;
             Ok(format!(
                 "block: epoch={epoch} hash={} sınav=1 VERIFIED üretim_maliyeti=10 bütçe={budget} - blok zincire yazılabilir",
                 hex8(&block.hash)
