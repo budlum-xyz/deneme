@@ -1,0 +1,122 @@
+# Teşhis: cargo check derleme hatası (yalnız workflow_dispatch)
+#
+# Azure blob log engeli nedeniyle CI loglari sandbox'tan okunamaz; derleme
+# hatasini PR yorumuna tasiyan gecici teşhis aracidir. KAPI DEGILDIR.
+# Kurallar: checkout SHA pinli, persist-credentials false, em-dash yok.
+# v2: indexleme tetigi.
+# v3: guncel agacta fmt patch yeniden uretimi.
+# v4: eed3fba sonrasi yeniden kosum.
+# v5: &mut registry fix sonrasi.
+# v6: hata konumu (-->) rapora eklendi.
+# v7: 554ae98 sonrasi.
+# v8: 2f7110d sonrasi.
+
+name: Diagnostic Cargo Check
+
+on:
+  push:
+    paths:
+      - ".github/workflows/diagnostic-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  check:
+    name: cargo check (derleme hatasi raporu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Toolchain + protoc
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --component clippy
+          rustup default 1.97.0
+          sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+      - name: actionlint v1.7.12 kur (sha256 pinli, ci.yml deseni)
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  /tmp/actionlint.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/actionlint.tar.gz -C /usr/local/bin actionlint
+          actionlint --version
+      - name: Repo Lint detayi (actionlint + zizmor + gates)
+        run: |
+          set +e
+          {
+            echo "=== ACTIONLINT ==="
+            actionlint 2>&1 | head -30
+            echo "=== ZIZMOR ==="
+            zizmor .github/workflows 2>&1 | head -30
+          } > /tmp/repo-lint.txt
+          wc -l /tmp/repo-lint.txt
+      - name: gates --all (hangi kapi FAIL)
+        run: |
+          set +e
+          cargo run --release --manifest-path xtask/gates/Cargo.toml -- --all > /tmp/gates.txt 2>&1
+          echo "gates exit: $?"
+          grep -E "FAIL|error" /tmp/gates.txt | head -25 > /tmp/gates-fail.txt
+          {
+            echo "## Diagnostic Gates --all"
+            echo '```'
+            cat /tmp/gates-fail.txt
+            echo '```'
+          } > /tmp/gates-report.md
+          gh pr comment 189 --repo budlum-xyz/budlum --body-file /tmp/gates-report.md
+      - name: Repo Lint detayini PR #189'a yorumla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## Diagnostic Repo Lint"
+            echo '```'
+            cat /tmp/repo-lint.txt
+            echo '```'
+          } > /tmp/rl-report.md
+          gh pr comment 189 --repo budlum-xyz/budlum --body-file /tmp/rl-report.md
+      - name: fmt diff uret (cargo fmt uygula)
+        run: |
+          cargo fmt
+          git diff > /tmp/fmt.patch
+          echo "patch satir: $(wc -l < /tmp/fmt.patch)"
+      - name: fmt patch'i PR #189'a yorumla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## Diagnostic FMT Patch"
+            echo '```diff'
+            cat /tmp/fmt.patch
+            echo '```'
+          } > /tmp/fmt-report.md
+          gh pr comment 189 --repo budlum-xyz/budlum --body-file /tmp/fmt-report.md
+      - name: fmt + clippy + test (CI adimlari)
+        run: |
+          set +e
+          {
+            echo "=== FORMAT ==="
+            cargo fmt --all -- --check 2>&1 | head -60
+            echo "fmt exit: ${PIPESTATUS[0]}"
+            echo "=== CLIPPY ==="
+            cargo clippy --all-targets -- -D warnings 2>&1 | grep -E "error|warning|-->" | head -50
+            echo "clippy exit: ${PIPESTATUS[0]}"
+            echo "=== TEST (lib) ==="
+            cargo test --lib 2>&1 | grep -E "error|FAILED|test result|panicked|-->" | head -40
+            echo "test exit: ${PIPESTATUS[0]}"
+          } > /tmp/check.txt
+      - name: Hatalari PR #189'a yorumla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## Diagnostic Cargo Check"
+            echo '```'
+            cat /tmp/check.txt
+            echo '```'
+          } > /tmp/report.md
+          gh pr comment 189 --repo budlum-xyz/budlum --body-file /tmp/report.md
